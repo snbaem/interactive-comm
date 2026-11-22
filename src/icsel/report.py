@@ -15,7 +15,10 @@ APPROX_NOTE = (
 
 
 def build_result(
-    letter: LetterStructure, results: list[MatchResult], sample_pdf: Path | None
+    letter: LetterStructure,
+    results: list[MatchResult],
+    sample_pdf: Path | None,
+    llm: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the JSON result for one letter.
 
@@ -23,6 +26,7 @@ def build_result(
         letter: Detected structure of the letter.
         results: Ranking from :func:`icsel.match.rank` (best first).
         sample_pdf: Path of the rendered sample PDF, if one was written.
+        llm: What the optional AI step did (see :func:`icsel.pipeline.analyze`).
     """
     best = results[0]
     return {
@@ -32,4 +36,5 @@ def build_result(
         "ranking": [r.to_dict() for r in results],
         "sample_pdf": sample_pdf.as_posix() if sample_pdf else None,
         "fidelity": APPROX_NOTE,
+        "llm": llm or {"enabled": False},
     }

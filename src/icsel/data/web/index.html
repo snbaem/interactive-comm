@@ -93,6 +93,12 @@ a.btn { text-decoration: none; display: inline-block; }
 .chip { display: inline-block; padding: 0 7px; border-radius: 4px; color: #fff; font-size: 11.5px;
   font-weight: 600; }
 .mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ai-badge { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 700; background: var(--accent-soft); color: var(--accent);
+  cursor: help; }
+.ai-box { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); }
+.ai-box .ai-title { font-weight: 600; font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+.ai-box .ai-meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .text { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tr.blk.hl td { background: var(--accent-soft); }
 .links { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -121,6 +127,7 @@ footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
 <header>
   <h1>icsel layout selector</h1>
   <span class="tag" id="version"></span>
+  <span class="tag" id="ai-status"></span>
   <span class="tag">Local prototype · not an official Adobe project</span>
 </header>
 <p class="notice" id="fidelity">The sample PDF is a local approximation for checking fit. It is not AEM Forms Interactive Communications output.</p>
@@ -311,6 +318,23 @@ function lowFitCard(run) {
         h("span", { class: "pill " + (r.fits ? "ok" : "bad") }, r.score.toFixed(2))))));
 }
 
+function aiBox(run) {
+  const llm = run.llm || {};
+  if (!llm.enabled) return null;
+  const changes = llm.role_changes || [];
+  const errors = llm.errors || [];
+  return h("div", { class: "ai-box" },
+    h("div", { class: "ai-title" }, "Why this fit (AI)"),
+    llm.explanation ? h("div", {}, llm.explanation) : h("div", { class: "ai-meta" }, "No explanation returned."),
+    changes.length ? h("div", { class: "ai-meta" },
+      "AI labeled " + changes.length + " block" + (changes.length > 1 ? "s" : "") +
+      " the rules could not: " + changes.map(c => c.from + " → " + c.to).join(", ") +
+      ". They are marked AI in the blocks table.") : null,
+    errors.map(e => h("div", { class: "fail" }, "AI step: " + e)),
+    h("div", { class: "ai-meta" }, llm.backend + " / " + llm.model +
+      " · AI output can be wrong; check it against the scores above."));
+}
+
 function renderRun() {
   const run = state.run;
   const main = document.getElementById("main");
@@ -327,7 +351,8 @@ function renderRun() {
       h("span", { class: "pill neutral" }, "score " + best.score.toFixed(3)),
       h("div", { class: "links", style: "margin-left:auto" },
         h("a", { class: "btn", href: run.result_json, target: "_blank" }, "Result JSON"),
-        h("a", { class: "btn", href: run.source.pdf, target: "_blank" }, "Source PDF"))));
+        h("a", { class: "btn", href: run.source.pdf, target: "_blank" }, "Source PDF"))),
+    aiBox(run));
 
   const rows = [];
   for (const r of run.ranking) {
@@ -459,7 +484,8 @@ function blocksTable(run) {
         if (b.page !== state.srcPage + 1) { state.srcPage = b.page - 1; state.hoverBlock = i; renderRun(); return; }
         state.hoverBlock = i; drawOverlay(); },
       onmouseleave: () => { state.hoverBlock = null; drawOverlay(); } },
-    h("td", {}, h("span", { class: "chip", style: "background:" + roleColor(b.role) }, b.role)),
+    h("td", {}, h("span", { class: "chip", style: "background:" + roleColor(b.role) }, b.role),
+      b.role_source === "llm" ? h("span", { class: "ai-badge", title: "Labeled by AI: " + (b.note || "") }, "AI") : null),
     h("td", { class: "mono" }, b.page),
     h("td", { class: "mono" }, inch(b.y)), h("td", { class: "mono" }, inch(b.x)),
     h("td", { class: "mono" }, inch(b.width) + " × " + inch(b.height)),
@@ -490,6 +516,10 @@ function wireUpload() {
   try {
     state.info = await api("GET", "/api/info");
     document.getElementById("version").textContent = "v" + state.info.version;
+    const ai = state.info.llm || {};
+    document.getElementById("ai-status").textContent = ai.enabled
+      ? "AI step on · " + ai.backend + " / " + ai.model
+      : "AI step off";
     document.getElementById("fidelity").textContent = state.info.fidelity;
     renderSidebar();
   } catch (e) { showError("Cannot reach the icsel server: " + e.message); }

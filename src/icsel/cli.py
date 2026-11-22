@@ -10,13 +10,17 @@ import argparse
 import json
 import logging
 import sys
+import textwrap
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
-from .match import MatchResult, rank
+from .llm import Assistant, LLMError, available_backends, get_assistant
+from .match import MatchResult
+from .pipeline import analyze
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
 from .render import render_sample
 from .report import APPROX_NOTE, build_result
@@ -78,11 +82,36 @@ def _print_ranking(name: str, results: list[MatchResult]) -> None:
     print(f"  Best layout: {results[0].layout_id}")
 
 
+def _print_ai_notice(assistant: Assistant) -> None:
+    info = assistant.describe()
+    print(
+        f"AI step ON: {info['backend']} / {info['model']} (tasks: {', '.join(info['tasks'])}).\n"
+        "  Sent: the text of blocks the rules could not label, plus layout facts and scores.\n"
+        "  Only use letters you are allowed to send to this service."
+    )
+
+
+def _print_ai_result(llm: dict[str, Any]) -> None:
+    for change in llm.get("role_changes", []):
+        print(
+            f"  AI: block {change['index']} {change['from']} -> {change['to']} "
+            f"({change['confidence']:.2f}): {change['reason']}"
+        )
+    if llm.get("explanation"):
+        lines = textwrap.wrap(llm["explanation"], width=88)
+        print("  Why (AI): " + "\n            ".join(lines))
+    for err in llm.get("errors", []):
+        print(f"  AI step warning: {err}", file=sys.stderr)
+
+
 def cmd_match(args: argparse.Namespace) -> int:
     """Rank layouts for each letter; write a result JSON and sample PDF per letter."""
     layouts = load_profiles(args.layouts)
     by_id = {lay.id: lay for lay in layouts}
     letters = collect_files(args.letters, ".pdf", recursive=args.recursive)
+    assistant = get_assistant(args.llm)
+    if assistant.enabled:
+        _print_ai_notice(assistant)
     stems = unique_stems(letters)
     out_dir: Path = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -94,7 +123,8 @@ def cmd_match(args: argparse.Namespace) -> int:
             print(f"{pdf.name}\n  skipped: {exc}", file=sys.stderr)
             failed += 1
             continue
-        results = rank(letter, layouts)
+        analysis = analyze(letter, layouts, assistant)
+        results = analysis.results
         best = results[0]
         sample = render_sample(
             letter,
@@ -102,10 +132,12 @@ def cmd_match(args: argparse.Namespace) -> int:
             out_dir / f"{stems[pdf]}.sample.pdf",
             show_zones=not args.no_zones,
         )
-        result = build_result(letter, results, sample)
+        result = build_result(letter, results, sample, analysis.llm)
         json_path = out_dir / f"{stems[pdf]}.result.json"
         json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         _print_ranking(pdf.name, results)
+        if assistant.enabled:
+            _print_ai_result(analysis.llm)
         print(f"  Wrote {json_path} and {sample.name}")
     print(APPROX_NOTE)
     if failed:
@@ -163,8 +195,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .web import serve  # imported lazily: only this command needs the web module
 
     layouts = load_profiles(args.layouts) if args.layouts else None
+    assistant = get_assistant(args.llm)
+    if assistant.enabled:
+        _print_ai_notice(assistant)
     try:
-        serve(args.host, args.port, layouts, args.workdir, open_browser=args.open)
+        serve(
+            args.host,
+            args.port,
+            layouts,
+            args.workdir,
+            open_browser=args.open,
+            assistant=assistant,
+        )
     except OSError as exc:
         where = f"{args.host}:{args.port}" if args.port is not None else args.host
         print(f"error: cannot listen on {where} ({exc})", file=sys.stderr)
@@ -187,6 +229,12 @@ def build_parser() -> argparse.ArgumentParser:
         f"(default: bundled examples in {default_layouts_dir().name}/)"
     )
 
+    llm_help = (
+        "optional AI step: " + " | ".join(available_backends()) + " (default: the ICSEL_LLM "
+        "environment variable, else none). Sends the text of blocks the rules could not label "
+        "to that service."
+    )
+
     m = sub.add_parser("match", help="rank layouts for letters and render sample PDFs")
     m.add_argument(
         "letters",
@@ -201,6 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--no-zones", action="store_true", help="do not draw zone outlines in the sample PDF"
     )
+    m.add_argument("--llm", metavar="BACKEND", help=llm_help)
     m.set_defaults(func=cmd_match)
 
     pr = sub.add_parser("profile", help="derive draft layout profile(s) from PDF(s)")
@@ -244,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="folder for uploads and results (default: out/web)",
     )
     w.add_argument("--open", action="store_true", help="open the UI in your default browser")
+    w.add_argument("--llm", metavar="BACKEND", help=llm_help)
     w.set_defaults(func=cmd_serve)
     return p
 
@@ -259,6 +309,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except (ExtractionError, ProfileError, InputError) as exc:
+    except (ExtractionError, ProfileError, InputError, LLMError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

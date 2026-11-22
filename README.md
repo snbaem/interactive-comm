@@ -85,13 +85,60 @@ makes no outbound calls. Uploads and results go to `out/web/`. Stop it with
 Ctrl+C. Do not expose it with `--host 0.0.0.0` on a shared network: it has no
 authentication.
 
+## Optional AI step (off by default)
+
+The rules cannot label every block of a real letter: an unlabeled heading, a
+placeholder like `[Date]`, a table. An optional AI step can:
+
+1. **label blocks the rules left `unknown`**, so they count in the score and land in
+   the right box of the preview;
+2. **explain the fit** in one short paragraph, based on the scores.
+
+It is off unless you turn it on, and it never changes what the rules already
+labeled. It only fills gaps: no second address, date or subject, and only above a
+confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
+the result JSON and with an **AI** badge in the browser UI.
+
+```powershell
+python -m pip install -e ".[llm]"          # example backend: Claude via the Anthropic SDK
+$env:ANTHROPIC_API_KEY = "<your key>"       # or `ant auth login`; never commit a key
+icsel match samples\letters --llm anthropic
+icsel serve --llm anthropic
+```
+
+```bash
+python -m pip install -e ".[llm]"
+export ANTHROPIC_API_KEY=...                # or `ant auth login`
+icsel match samples/letters --llm anthropic
+```
+
+`--llm` overrides the `ICSEL_LLM` environment variable. Other settings are
+environment variables too (see [`.env.example`](.env.example)): `ICSEL_LLM_MODEL`
+(default `claude-opus-5-5`), `ICSEL_LLM_EFFORT` (default `low`),
+`ICSEL_LLM_TASKS` (`classify,explain`), `ICSEL_LLM_MIN_CONFIDENCE` (default 0.5)
+and `ICSEL_PROMPTS_DIR` to use your own prompt wording. The example backend has
+server-side refusal fallbacks on; set `ICSEL_LLM_FALLBACKS=0` on platforms without them.
+
+**What is sent:** only the text of blocks the rules could not label (up to 600
+characters each), plus positions, sizes and rule-based roles of the other blocks.
+The explanation is built from scores alone and sends no letter text.
+**Only enable the AI step for letters you are allowed to send to the model
+endpoint you configure.** `ICSEL_LLM_TASKS=explain` sends no letter text at all.
+See [`src/icsel/prompts/`](src/icsel/prompts/README.md) for the prompt templates.
+
+**Other providers:** the AI step is written against a one-method interface
+(`CompletionBackend.complete(system, prompt, json_schema)` in
+[`icsel/llm/base.py`](src/icsel/llm/base.py)). To add a provider, implement it and
+call `icsel.llm.register_backend("name", factory)`. Prompts, data minimization and
+guard rails are shared. Tests use a fake backend and never touch the network.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`. |
+| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--llm BACKEND`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
-| `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`). |
+| `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`, `--llm`). |
 | `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). |
 
 `PATH` can be a file, a folder or a glob pattern such as `letters/*.pdf`. icsel
@@ -128,7 +175,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access.
 
 - Only text-based PDFs work. Scanned or image-only PDFs are reported, not read
   with OCR.
-- Block detection is rule-based and tuned for typical business letters.
+- Block detection is rule-based and tuned for typical business letters. The optional
+  AI step fills gaps but can be wrong too; check its labels against the scores.
 - The sample PDF approximates placement only. It does not reproduce IC fonts,
   fragments, data binding or pagination.
 

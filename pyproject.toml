@@ -32,6 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional AI step (off by default): the example Anthropic backend.
+llm = [
+    "anthropic>=2.12",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -51,7 +55,7 @@ version = { attr = "icsel.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-icsel = ["py.typed", "data/layouts/*.json", "data/web/*.html"]
+icsel = ["py.typed", "data/layouts/*.json", "data/web/*.html", "prompts/*.md"]
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]

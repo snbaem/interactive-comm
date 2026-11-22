@@ -28,7 +28,7 @@ import threading
 import traceback
 import uuid
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,7 +39,9 @@ import pdfplumber
 
 from . import __version__
 from .extract import ExtractionError, LetterStructure, extract
-from .match import LOW_FIT_THRESHOLD, MatchResult, rank
+from .llm import Assistant, NoOpAssistant
+from .match import LOW_FIT_THRESHOLD, MatchResult
+from .pipeline import analyze
 from .profile import LayoutProfile, load_profiles
 from .render import overflows, plan_placement, render_sample
 from .report import APPROX_NOTE, build_result
@@ -84,6 +86,7 @@ class Run:
     folder: Path
     letter: LetterStructure
     results: list[MatchResult]
+    llm: dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_part(text: str) -> str:
@@ -106,7 +109,10 @@ def _page_images(pdf: Path, prefix: str) -> list[str]:
 class App:
     """State and actions behind the HTTP handler. Safe to call from several threads."""
 
-    def __init__(self, layouts: list[LayoutProfile], workdir: Path) -> None:
+    def __init__(
+        self, layouts: list[LayoutProfile], workdir: Path, assistant: Assistant | None = None
+    ) -> None:
+        self.assistant: Assistant = assistant or NoOpAssistant()
         self.layouts = layouts
         self.by_id = {lay.id: lay for lay in layouts}
         self.workdir = Path(workdir)
@@ -123,6 +129,7 @@ class App:
             "version": __version__,
             "fidelity": APPROX_NOTE,
             "low_fit_threshold": LOW_FIT_THRESHOLD,
+            "llm": self.assistant.describe(),
             "layouts": [lay.to_dict() for lay in self.layouts],
             "samples": self.samples,
         }
@@ -164,12 +171,13 @@ class App:
             msg = str(exc).replace(str(source), name)
             raise WebError(HTTPStatus.UNPROCESSABLE_ENTITY, msg) from exc
         letter.source = name
-        results = rank(letter, self.layouts)
-        run = Run(run_id, name, folder, letter, results)
+        analysis = analyze(letter, self.layouts, self.assistant)
+        results = analysis.results
+        run = Run(run_id, name, folder, letter, results, analysis.llm)
         with self._lock:
             self.runs[run_id] = run
         sample_info = self.render(run_id, results[0].layout_id)
-        result_doc = build_result(letter, results, Path(sample_info["file"]))
+        result_doc = build_result(letter, results, Path(sample_info["file"]), analysis.llm)
         (folder / "result.json").write_text(json.dumps(result_doc, indent=2) + "\n", "utf-8")
         return self._payload(run, sample_info)
 
@@ -224,6 +232,7 @@ class App:
             "sample": {k: v for k, v in sample_info.items() if k != "file"},
             "result_json": base + "result.json",
             "fidelity": APPROX_NOTE,
+            "llm": run.llm,
         }
 
 
@@ -329,6 +338,7 @@ def make_server(
     port: int | None = None,
     layouts: list[LayoutProfile] | None = None,
     workdir: Path = Path("out") / "web",
+    assistant: Assistant | None = None,
 ) -> ThreadingHTTPServer:
     """Create (but do not start) the HTTP server.
 
@@ -338,11 +348,12 @@ def make_server(
             :data:`DEFAULT_PORT` and the next few ports until one is free.
         layouts: Layout profiles; defaults to the bundled examples.
         workdir: Folder for sample letters, uploads and results.
+        assistant: Optional AI step (default: off).
 
     Raises:
         OSError: If the port (or every port tried) is in use.
     """
-    app = App(layouts if layouts is not None else load_profiles(), workdir)
+    app = App(layouts if layouts is not None else load_profiles(), workdir, assistant)
     handler = type("Handler", (_Handler,), {"app": app})
     if port is not None:
         return _Server((host, port), handler)
@@ -372,9 +383,10 @@ def serve(
     layouts: list[LayoutProfile] | None = None,
     workdir: Path = Path("out") / "web",
     open_browser: bool = False,
+    assistant: Assistant | None = None,
 ) -> None:
     """Run the web UI until interrupted (Ctrl+C)."""
-    server = make_server(host, port, layouts, workdir)
+    server = make_server(host, port, layouts, workdir, assistant)
     actual_port = server.server_address[1]
     shown = "127.0.0.1" if host in ("", "0.0.0.0") else host
     url = f"http://{shown}:{actual_port}/"

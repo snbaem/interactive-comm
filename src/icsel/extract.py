@@ -95,6 +95,10 @@ class Block:
     page: int = 1
     bold: bool = False
     role: str = "unknown"
+    #: Who assigned ``role``: ``"rules"`` or ``"llm"`` (the optional AI step).
+    role_source: str = "rules"
+    #: Why the AI step chose the role (empty for rule-based roles).
+    note: str = ""
 
     @property
     def right(self) -> float:
@@ -128,6 +132,8 @@ class Block:
             "line_count": self.line_count,
             "bold": self.bold,
             "lines": self.lines,
+            "role_source": self.role_source,
+            **({"note": self.note} if self.note else {}),
         }
 
 
