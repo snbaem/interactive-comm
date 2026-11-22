@@ -1,0 +1,15 @@
+{
+  "profile_version": 1,
+  "id": "subject-right",
+  "name": "Subject box right",
+  "description": "Address box top left with a subject box beside it on the right. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 504, "height": 54},
+    {"role": "date", "x": 330, "y": 120, "width": 210, "height": 16, "max_lines": 1},
+    {"role": "address", "x": 72, "y": 144, "width": 216, "height": 86, "max_lines": 6, "required": true},
+    {"role": "subject", "x": 330, "y": 144, "width": 210, "height": 60, "max_lines": 4},
+    {"role": "body", "x": 72, "y": 260, "width": 468, "height": 460},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "profile_version": 1,
+  "id": "classic-left",
+  "name": "Classic, address left",
+  "description": "Address box top left, date top right, full-width subject line under the address. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 504, "height": 54},
+    {"role": "date", "x": 396, "y": 108, "width": 162, "height": 16, "max_lines": 1},
+    {"role": "address", "x": 72, "y": 144, "width": 252, "height": 86, "max_lines": 6, "required": true},
+    {"role": "subject", "x": 72, "y": 252, "width": 468, "height": 30, "max_lines": 2},
+    {"role": "body", "x": 72, "y": 300, "width": 468, "height": 420},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}

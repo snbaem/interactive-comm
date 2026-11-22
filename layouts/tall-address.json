@@ -1,0 +1,15 @@
+{
+  "profile_version": 1,
+  "id": "tall-address",
+  "name": "Tall address box",
+  "description": "Taller address box (up to 9 lines) for care-of and multi-line business addresses; body starts lower. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 504, "height": 54},
+    {"role": "date", "x": 396, "y": 108, "width": 162, "height": 16, "max_lines": 1},
+    {"role": "address", "x": 72, "y": 132, "width": 252, "height": 112, "max_lines": 9, "required": true},
+    {"role": "subject", "x": 72, "y": 268, "width": 468, "height": 30, "max_lines": 2},
+    {"role": "body", "x": 72, "y": 316, "width": 468, "height": 404},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}
