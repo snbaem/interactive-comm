@@ -42,6 +42,7 @@ def test_index_and_info(base_url: str) -> None:
     assert {lay["id"] for lay in info["layouts"]} >= {"classic-left", "subject-right"}
     assert any(s["file"] == "L01-classic.pdf" for s in info["samples"])
     assert "approximation" in info["fidelity"]
+    assert 0 < info["low_fit_threshold"] < 1
 
 
 def test_sample_run_and_render_other_layout(base_url: str) -> None:
@@ -58,8 +59,14 @@ def test_sample_run_and_render_other_layout(base_url: str) -> None:
     status, body, _ = _req(base_url + f"/api/runs/{run['id']}/render?layout=classic-left", "POST")
     assert status == 200
     other = json.loads(body)
+    assert [o["role"] for o in other["overflow"]] == ["subject"]  # 3 lines in a 2-line box
+    assert other["unplaced"] == []
     status, pdf, ctype = _req(base_url + other["pdf"])
     assert status == 200 and ctype == "application/pdf" and pdf.startswith(b"%PDF")
+    status, clean, ctype = _req(base_url + other["clean_pdf"])
+    assert status == 200 and clean.startswith(b"%PDF") and clean != pdf
+    with urllib.request.urlopen(base_url + other["pdf"], timeout=30) as res:
+        assert res.headers["Cache-Control"] == "no-store"
 
 
 def test_upload(base_url: str, letters_dir: Path) -> None:
@@ -94,3 +101,23 @@ def test_busy_port_is_an_error_not_silently_shared(tmp_path: Path) -> None:
         port = busy.getsockname()[1]
         with pytest.raises(OSError):
             make_server(port=port, workdir=tmp_path)
+
+
+def test_page_script_parses(tmp_path: Path) -> None:
+    """A JavaScript syntax error would silently break the whole UI."""
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed")
+    from icsel import web
+
+    html = (Path(web.__file__).parent / "data" / "web" / "index.html").read_text(encoding="utf-8")
+    script = re.search(r"<script>(.*)</script>", html, re.S)
+    assert script is not None
+    js = tmp_path / "page.js"
+    js.write_text(script.group(1), encoding="utf-8")
+    result = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -6,9 +6,10 @@ Scoring, per role ``r`` in :data:`ROLE_WEIGHTS`::
     overlap_r   = area(letter block inside zone) / area(letter block)
     score_r     = 0.6 * closeness_r + 0.4 * overlap_r
 
-with special cases: letter has the role but the layout has no zone -> 0;
-layout has the zone but the letter lacks the role -> :data:`MISSING_ROLE_SCORE`.
-The total is the weighted mean of ``score_r``, in 0..1.
+with special cases: letter has the role but the layout has no zone -> 0 (the
+layout has nowhere to put it); layout has the zone but the letter lacks the
+role -> not scored (an empty optional box is not a misfit; required zones are a
+hard check instead). The total is the weighted mean of the scored roles, in 0..1.
 
 Hard checks (any failure means the layout does not fit, whatever the score):
 
@@ -29,8 +30,9 @@ from .profile import LayoutProfile, Zone
 ROLE_WEIGHTS: dict[str, float] = {"address": 3.0, "subject": 3.0, "date": 1.0, "body": 2.0}
 POSITION_SCALE = 72.0  # points; a block one inch away from its zone gets zero closeness
 CLOSENESS_SHARE = 0.6
-MISSING_ROLE_SCORE = 0.5
 WIDTH_TOLERANCE = 18.0  # points
+#: Below this best score the UI suggests previewing other layouts.
+LOW_FIT_THRESHOLD = 0.8
 
 
 @dataclass
@@ -38,7 +40,7 @@ class RoleScore:
     """Structured score for one role in one layout."""
 
     role: str
-    score: float
+    score: float | None  # None = not scored (the letter has no block for this role)
     dx: float | None = None
     dy: float | None = None
     closeness: float | None = None
@@ -114,7 +116,7 @@ def score_layout(letter: LetterStructure, layout: LayoutProfile) -> MatchResult:
             assert zone is not None
             if zone.required:
                 failures.append(f"layout requires a {role} block; none found")
-            roles.append(RoleScore(role, MISSING_ROLE_SCORE, note="letter has no such block"))
+            roles.append(RoleScore(role, None, note="letter has none; not scored"))
             continue
         if zone is None:
             roles.append(RoleScore(role, 0.0, note="layout has no such zone"))
@@ -126,8 +128,9 @@ def score_layout(letter: LetterStructure, layout: LayoutProfile) -> MatchResult:
             failures.extend(_hard_checks(role, block, zone))
         s = CLOSENESS_SHARE * closeness + (1 - CLOSENESS_SHARE) * overlap
         roles.append(RoleScore(role, s, dx, dy, closeness, overlap))
-    total_w = sum(ROLE_WEIGHTS[r.role] for r in roles) or 1.0
-    total = sum(ROLE_WEIGHTS[r.role] * r.score for r in roles) / total_w
+    scored = [(ROLE_WEIGHTS[r.role], r.score) for r in roles if r.score is not None]
+    total_w = sum(w for w, _ in scored)
+    total = sum(w * sc for w, sc in scored) / total_w if total_w else 0.0
     return MatchResult(layout.id, layout.name, total, not failures, failures, roles)
 
 

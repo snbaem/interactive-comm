@@ -37,7 +37,7 @@ aside, main { min-width: 0; }
   padding: 14px; margin-bottom: 14px; }
 .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
   margin: 0 0 10px; }
-.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 18px 12px; text-align: center;
+.drop { display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 18px 12px; text-align: center;
   cursor: pointer; color: var(--muted); transition: border-color .15s, background .15s; }
 .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
 .drop strong { color: var(--accent); }
@@ -100,6 +100,20 @@ tr.blk.hl td { background: var(--accent-soft); }
   border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
   vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.btn { white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { cursor: default; opacity: .85; }
+.btn.choice { display: inline-flex; gap: 6px; align-items: center; padding: 5px 10px; }
+.btn.choice.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.hint { background: var(--warn-soft); border-color: var(--warn-soft); }
+.hint .hint-title { color: var(--warn); font-weight: 600; margin-bottom: 8px; }
+select.picker { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; max-width: 100%;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.pstatus { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 8px;
+  font-size: 12.5px; color: var(--muted); }
+.pstatus .fail { width: 100%; }
+.unplaced-note { width: 100%; background: #fff1c7; color: #6b4e00; border-radius: 6px;
+  padding: 4px 8px; cursor: help; }
 footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
 </style>
 </head>
@@ -260,6 +274,10 @@ async function selectLayout(layoutId) {
     catch (e) { showError(e.message); return; }
   }
   setBusy(null); renderRun();
+  const viewers = document.getElementById("viewers");
+  if (viewers && viewers.getBoundingClientRect().top > window.innerHeight * 0.6) {
+    viewers.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 function show(run) {
   state.run = run; state.srcPage = 0; state.smpPage = 0;
@@ -267,12 +285,37 @@ function show(run) {
 }
 
 // ------------------------------------------------------------------ main view
+const layoutName = id => (state.info.layouts.find(l => l.id === id) || {}).name || id;
+const rankOf = (run, id) => run.ranking.find(r => r.layout_id === id);
+
+function previewButton(run, r) {
+  const sel = r.layout_id === run.selected;
+  return h("button", { class: "btn" + (sel ? " primary" : ""), disabled: sel,
+      title: "Render the content of this letter in " + layoutName(r.layout_id),
+      onclick: e => { e.stopPropagation(); selectLayout(r.layout_id); } },
+    sel ? "Previewing" : "Preview my letter");
+}
+
+function lowFitCard(run) {
+  const best = run.ranking[0];
+  const thr = state.info.low_fit_threshold ?? 0.8;
+  if (best.fits && best.score >= thr) return null;
+  const why = !best.fits ? "No layout passes the hard checks."
+    : "Best fit is only " + best.score.toFixed(2) + " (below " + thr.toFixed(2) + ").";
+  return h("div", { class: "card hint" },
+    h("div", { class: "hint-title" }, why + " See how your content looks in another layout:"),
+    h("div", { class: "links" }, run.ranking.map(r =>
+      h("button", { class: "btn choice" + (r.layout_id === run.selected ? " active" : ""),
+                    onclick: () => selectLayout(r.layout_id) },
+        layoutName(r.layout_id),
+        h("span", { class: "pill " + (r.fits ? "ok" : "bad") }, r.score.toFixed(2))))));
+}
+
 function renderRun() {
   const run = state.run;
   const main = document.getElementById("main");
   const keep = [document.getElementById("busy"), document.getElementById("error")].filter(Boolean);
   const best = run.ranking[0];
-  const layoutName = id => (state.info.layouts.find(l => l.id === id) || {}).name || id;
 
   const verdict = h("div", { class: "card" },
     h("div", { class: "verdict" },
@@ -300,15 +343,19 @@ function renderRun() {
         h("div", { class: "roles" }, r.roles.map(x =>
           x.dx === null ? x.role + ": " + x.note
             : x.role + " " + x.score.toFixed(2) + " (Δx " + signedInch(x.dx) + ", Δy " + signedInch(x.dy) + ")"
-        ).join(" · ")))));
+        ).join(" · "))),
+      h("td", {}, previewButton(run, r))));
   }
-  const ranking = h("div", { class: "card" }, h("h2", {}, "Ranking — click a layout to preview it"),
+  const ranking = h("div", { class: "card" },
+    h("h2", {}, "Ranking — preview your letter in any layout"),
     h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Layout"), h("th", {}, "Score"),
-      h("th", {}, "Hard checks"), h("th", {}, "Details (offset of letter block from zone)"))),
+      h("th", {}, "Hard checks"), h("th", {}, "Details (offset of letter block from zone)"),
+      h("th", {}, ""))),
       h("tbody", {}, rows)));
 
   const viewers = h("div", { class: "viewers" }, sourceViewer(run), sampleViewer(run));
-  main.replaceChildren(...keep, verdict, ranking, h("div", { class: "card" }, viewers), blocksTable(run));
+  main.replaceChildren(...keep, verdict, lowFitCard(run) || "", ranking,
+    h("div", { class: "card", id: "viewers" }, viewers), blocksTable(run));
   drawOverlay();
 }
 
@@ -368,15 +415,39 @@ function sourceViewer(run) {
 }
 
 function sampleViewer(run) {
+  const picker = h("select", { class: "picker", "aria-label": "Layout to preview",
+      onchange: e => selectLayout(e.target.value) },
+    run.ranking.map(r => h("option", { value: r.layout_id, selected: r.layout_id === run.selected },
+      layoutName(r.layout_id) + " — " + r.score.toFixed(2) + " · " + (r.fits ? "fits" : "does not fit"))));
+  const head = h("div", { class: "vhead" },
+    h("h3", {}, "Your letter in ", picker));
   const smp = run.samples[run.selected];
-  if (!smp) return h("div", {}, h("div", { class: "vhead" }, h("h3", {}, "Sample")),
-    h("div", { class: "empty" }, h("span", { class: "spinner" })));
+  if (!smp) return h("div", {}, head, h("div", { class: "empty" }, h("span", { class: "spinner" })));
+  const r = rankOf(run, run.selected);
   const page = Math.min(state.smpPage, smp.pages.length - 1);
-  return h("div", {},
-    h("div", { class: "vhead" }, h("h3", {}, "Sample in " + smp.layout),
-      h("div", { class: "controls" },
-        h("a", { class: "btn", href: smp.pdf, target: "_blank" }, "Open PDF"),
-        pager(page, smp.pages.length, p => { state.smpPage = p; renderRun(); }))),
+  const overflow = smp.overflow || [];
+  const status = h("div", { class: "pstatus" },
+    h("span", { class: "pill " + (r.fits ? "ok" : "bad") }, r.fits ? "fits" : "does not fit"),
+    "score " + r.score.toFixed(3),
+    r.layout_id === run.ranking[0].layout_id ? h("span", { class: "pill neutral" }, "best match") : null,
+    h("span", { style: "margin-left:auto" },
+      h("a", { class: "btn", href: smp.pdf, target: "_blank",
+               title: "Preview with boxes, labels and highlights" }, "Open preview PDF"), " ",
+      h("a", { class: "btn", href: smp.clean_pdf, download: run.name.replace(/\.pdf$/i, "") + "-" + smp.layout + ".pdf",
+               title: "Your letter in this layout without boxes or labels (good for saving or re-uploading)" },
+        "Download clean PDF"),
+      " ", pager(page, smp.pages.length, p => { state.smpPage = p; renderRun(); })),
+    r.failures.map(f => h("div", { class: "fail" }, f)),
+    overflow.length ? h("div", { class: "fail" },
+      "Red text in the preview is content that does not fit its box: " +
+      overflow.map(o => o.role + " +" + o.extra + " line" + (o.extra > 1 ? "s" : "")).join(", ") + ".")
+      : null,
+    (smp.unplaced || []).length ? h("div", { class: "unplaced-note",
+        title: smp.unplaced.map(u => "p" + u.page + " " + u.role + ": " + u.first_line).join("\n") },
+      smp.unplaced.length + " part" + (smp.unplaced.length > 1 ? "s" : "") +
+      " of your letter have no matching box in this layout. They are still shown, " +
+      "in the body area with an amber background (hover for the list).") : null);
+  return h("div", {}, head, status,
     h("div", { class: "page" }, h("img", { src: smp.pages[page], alt: "Sample page " + (page + 1) })),
     h("div", { class: "legend" }, "Local approximation — not AEM Forms Interactive Communications output."));
 }

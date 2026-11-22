@@ -39,9 +39,9 @@ import pdfplumber
 
 from . import __version__
 from .extract import ExtractionError, LetterStructure, extract
-from .match import MatchResult, rank
+from .match import LOW_FIT_THRESHOLD, MatchResult, rank
 from .profile import LayoutProfile, load_profiles
-from .render import render_sample
+from .render import overflows, plan_placement, render_sample
 from .report import APPROX_NOTE, build_result
 from .synthetic import generate
 
@@ -122,6 +122,7 @@ class App:
         return {
             "version": __version__,
             "fidelity": APPROX_NOTE,
+            "low_fit_threshold": LOW_FIT_THRESHOLD,
             "layouts": [lay.to_dict() for lay in self.layouts],
             "samples": self.samples,
         }
@@ -185,14 +186,23 @@ class App:
             raise WebError(HTTPStatus.NOT_FOUND, f"unknown layout: {layout_id}")
         stem = f"sample-{_safe_part(layout.id)}"
         pdf = run.folder / f"{stem}.pdf"
+        clean = run.folder / f"{stem}-clean.pdf"
         if not pdf.exists():
             render_sample(run.letter, layout, pdf)
+        if not clean.exists():
+            render_sample(run.letter, layout, clean, show_zones=False)
         base = f"/runs/{run.id}/"
         return {
             "layout": layout.id,
             "file": pdf.name,
             "pdf": base + pdf.name,
+            "clean_pdf": base + clean.name,
             "pages": [base + n for n in _page_images(pdf, stem)],
+            "overflow": [o.to_dict() for o in overflows(run.letter, layout)],
+            "unplaced": [
+                {"role": b.role, "page": b.page, "first_line": b.lines[0][:80]}
+                for b in plan_placement(run.letter, layout).unplaced
+            ],
         }
 
     def _payload(self, run: Run, sample_info: dict[str, Any]) -> dict[str, Any]:
@@ -225,14 +235,12 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         sys.stderr.write(f"  {self.command} {self.path} -> {args[1] if len(args) > 1 else ''}\n")
 
-    def _send(
-        self, status: HTTPStatus, body: bytes, content_type: str, cache: bool = False
-    ) -> None:
+    def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        # Run files never change once written, so the browser may keep them.
-        self.send_header("Cache-Control", "private, max-age=3600" if cache else "no-store")
+        # Never cache: after a server restart an old page must not get stale files.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if self.command != "HEAD":
@@ -268,7 +276,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif len(parts) == 3 and parts[0] == "runs":
             path = self.app.run_file(parts[1], parts[2])
             ctype = _CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
-            self._send(HTTPStatus.OK, path.read_bytes(), ctype, cache=True)
+            self._send(HTTPStatus.OK, path.read_bytes(), ctype)
         elif parts == ["favicon.ico"]:
             self._send(HTTPStatus.NO_CONTENT, b"", "text/plain")
         else:

@@ -66,7 +66,19 @@ busy, it uses the next free one and prints the address. You can:
 - see the ranking with each layout's hard-check failures and per-block offsets;
 - view the source letter with its detected blocks and the layout zones drawn on top,
   beside the sample rendered in that layout;
-- click any layout in the ranking to render the letter in it instead.
+- preview your own letter's content in **any** layout: use the *Preview my letter*
+  button on a ranking row or the *Your letter in* picker above the sample. When the best
+  score is below 0.8, or no layout fits, a hint offers one button per layout;
+- every part of your letter appears in the preview. Text goes into the box for its
+  role. Anything the layout has no box for (an unrecognized heading, a table, a
+  date when the layout has no date box) flows into the body area in reading order
+  with an amber background, and side-by-side blocks stay together as a table.
+  Text that does not fit its box is drawn in red and labeled, for example
+  `address: 2 lines over the box (6 max)`.
+- *Open preview PDF* shows the boxes, labels and highlights. *Download clean PDF*
+  gives your letter in that layout without them, which is the one to save or share.
+  Either one can be uploaded again: icsel ignores its own labels, so the layout it was
+  made in scores close to 1.0.
 
 The server uses only the Python standard library. It listens on `127.0.0.1` and
 makes no outbound calls. Uploads and results go to `out/web/`. Stop it with
@@ -77,7 +89,7 @@ authentication.
 
 | Command | What it does |
 | --- | --- |
-| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. Options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--no-zones`. |
+| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
 | `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`). |
 | `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). |

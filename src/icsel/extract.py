@@ -25,12 +25,42 @@ import pdfplumber
 SEGMENT_GAP = 18.0
 #: Max left-edge difference (pt) for two segments to belong to one block.
 ALIGN_TOLERANCE = 12.0
-#: Max vertical gap, as a fraction of text height, between lines of a block.
-LINE_GAP_RATIO = 0.5
+#: Max vertical gap, as a fraction of text height, between lines of a block. 0.75 keeps
+#: lines set at 1.5x spacing together, while a blank line (gap >= 1.0) still splits.
+LINE_GAP_RATIO = 0.75
 #: Blocks starting above this (pt from top) on page 1 count as letterhead.
 LETTERHEAD_LIMIT = 100.0
 #: Blocks starting this close (pt) to the page bottom count as footer.
 FOOTER_MARGIN = 50.0
+
+#: PDF "Creator" set on sample PDFs that icsel renders.
+SAMPLE_CREATOR = "icsel sample renderer"
+#: Title prefix of icsel sample PDFs (also set by versions before SAMPLE_CREATOR existed).
+SAMPLE_TITLE_PREFIX = "icsel sample"
+#: Font family icsel uses for its own labels and notes in sample PDFs.
+DIAGNOSTIC_FONT = "Courier"
+#: In icsel samples, letter text is never smaller than 7 pt; labels are 6-6.5 pt.
+_MARK_MAX_SIZE = 6.75
+
+
+def is_icsel_sample(metadata: dict[str, Any]) -> bool:
+    """True if PDF metadata says the file is a sample rendered by icsel."""
+    creator = str(metadata.get("Creator", ""))
+    title = str(metadata.get("Title", ""))
+    return creator == SAMPLE_CREATOR or title.startswith(SAMPLE_TITLE_PREFIX)
+
+
+def _is_icsel_mark(word: dict[str, Any]) -> bool:
+    """A label or note icsel drew on its own sample (not letter content).
+
+    Current samples draw these in Courier. Older samples drew box labels in
+    6-6.5 pt Helvetica and the fidelity note in Helvetica-Oblique; icsel never
+    draws letter content that small or in an oblique font.
+    """
+    font = str(word.get("fontname", ""))
+    size = float(word.get("size", 99.0))
+    return DIAGNOSTIC_FONT in font or "Oblique" in font or size < _MARK_MAX_SIZE
+
 
 #: Roles that together make up the "body" area of a letter.
 BODY_ROLES = ("salutation", "body", "closing")
@@ -42,7 +72,7 @@ _DATE_RE = re.compile(
     re.IGNORECASE,
 )
 _SUBJECT_RE = re.compile(r"^\s*(subject|re|regarding)\s*:", re.IGNORECASE)
-_SALUTATION_RE = re.compile(r"^\s*(dear|hello|hi)\b", re.IGNORECASE)
+_SALUTATION_RE = re.compile(r"^\s*(dear|hello|hi|to whom it may concern)\b", re.IGNORECASE)
 _CLOSING_RE = re.compile(
     r"^\s*(kind regards|regards|best regards|sincerely|yours (sincerely|faithfully|truly))\b",
     re.IGNORECASE,
@@ -119,14 +149,13 @@ class LetterStructure:
         """Bounding box of a role on page 1, merging blocks where needed.
 
         ``"body"`` covers salutation, body paragraphs and closing together, which
-        is what a layout's body zone holds.
+        is what a layout's body zone holds, plus any ``unknown`` blocks that sit
+        below the header blocks (address, subject, date) and above the end of
+        the closing, such as a heading or a table at the top of the body.
         """
-        roles = BODY_ROLES if role == "body" else (role,)
-        found = self.blocks_with(*roles, page=1)
+        found = self._body_blocks() if role == "body" else self.blocks_with(role, page=1)[:1]
         if not found:
             return None
-        if role != "body":
-            found = found[:1]
         x0 = min(b.x for b in found)
         y0 = min(b.y for b in found)
         x1 = max(b.right for b in found)
@@ -135,6 +164,18 @@ class LetterStructure:
         return Block(
             x0, y0, x1 - x0, y1 - y0, lines, page=1, bold=all(b.bold for b in found), role=role
         )
+
+    def _body_blocks(self) -> list[Block]:
+        core = self.blocks_with(*BODY_ROLES, page=1)
+        if not core:
+            return []
+        header = self.blocks_with("address", "subject", "date", page=1)
+        head_bottom = max((b.bottom for b in header), default=LETTERHEAD_LIMIT)
+        end = max(b.bottom for b in core)
+        extra = [
+            b for b in self.blocks_with("unknown", page=1) if b.y >= head_bottom and b.bottom <= end
+        ]
+        return core + extra
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view for JSON output."""
@@ -220,13 +261,33 @@ def _blocks(segs: list[_Seg], page: int) -> list[Block]:
     return [b for b, _ in open_blocks]
 
 
+def _table_cells(blocks: list[Block]) -> set[int]:
+    """Ids of blocks that sit in a row with two or more other blocks (table cells).
+
+    Two side-by-side blocks are common in letters (address beside a subject box),
+    so only rows of three or more count as a table.
+    """
+    cells: set[int] = set()
+    for b in blocks:
+        beside = [
+            o
+            for o in blocks
+            if o is not b and o.page == b.page and o.y < b.bottom - 1 and o.bottom > b.y + 1
+        ]
+        if len(beside) >= 2:
+            cells.add(id(b))
+    return cells
+
+
 def _classify(blocks: list[Block], page_h: float) -> None:
     """Assign roles in place. ``blocks`` is in reading order across pages."""
     salutation_seen = False
     closing_seen = False
     address_seen = False
+    cells = _table_cells(blocks)
     for b in blocks:
         first = b.lines[0]
+        in_table = id(b) in cells
         if b.page == 1 and b.y < LETTERHEAD_LIMIT:
             b.role = "letterhead"
         elif b.y > page_h - FOOTER_MARGIN:
@@ -241,6 +302,8 @@ def _classify(blocks: list[Block], page_h: float) -> None:
         elif _SALUTATION_RE.match(first):
             b.role = "salutation"
             salutation_seen = True
+        elif in_table:
+            b.role = "unknown"  # a date or name inside a table is data, not the letter's date
         elif b.line_count == 1 and _DATE_RE.match(first):
             b.role = "date"
         elif _SUBJECT_RE.match(first):
@@ -270,8 +333,15 @@ def extract(pdf_path: Path) -> LetterStructure:
         structure = LetterStructure(
             str(pdf_path), float(first.width), float(first.height), len(pdf.pages)
         )
+        own_sample = is_icsel_sample(pdf.metadata or {})
         for i, page in enumerate(pdf.pages, start=1):
-            words = page.extract_words(extra_attrs=["fontname"], x_tolerance=1.5, y_tolerance=2)
+            words = page.extract_words(
+                extra_attrs=["fontname", "size"], x_tolerance=1.5, y_tolerance=2
+            )
+            if own_sample:
+                # A sample PDF made by icsel: drop its own labels and notes so a
+                # downloaded preview reads back as just the letter.
+                words = [w for w in words if not _is_icsel_mark(w)]
             structure.blocks.extend(_blocks(_segments(words), i) if words else [])
     if not structure.blocks:
         raise ExtractionError(f"{pdf_path}: no extractable text (scanned or image-only PDF?)")

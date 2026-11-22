@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -253,6 +254,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Never crash on a console that cannot encode a character in a file name.
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
+    # pdfminer logs harmless font warnings (e.g. "Could not get FontBBox") for many PDFs.
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
