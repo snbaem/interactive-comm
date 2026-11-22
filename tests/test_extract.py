@@ -63,3 +63,37 @@ def test_date_inside_a_table_row_is_not_the_letter_date(tmp_path: Path) -> None:
     s = extract(pdf)
     assert not s.blocks_with("date")
     assert [b.role for b in s.blocks if b.y < 320] == ["unknown", "unknown", "unknown"]
+
+
+def test_heading_date_placeholder_and_bold_name(notice_letter, tmp_path: Path) -> None:
+    s = extract(notice_letter(tmp_path))
+    by_first = {b.lines[0]: b for b in s.blocks}
+    assert by_first["NOTICE OF PAST-DUE ACCOUNT"].role == "subject"
+    assert by_first["[Date]"].role == "date"
+    address = by_first["Alex Sample"]
+    assert address.role == "address" and address.line_count == 3
+    # A date inside the account table is a cell, not the letter date.
+    cell = next(b for b in s.blocks if "October 15, 2026" in b.lines)
+    assert cell.role == "unknown"
+    assert [b.lines[0] for b in s.blocks_with("date")] == ["[Date]"]
+
+
+@pytest.mark.parametrize("text", ["Nov. 22, 2026", "22 Nov 2026", "Sept 3, 2026", "[Letter Date]"])
+def test_more_date_forms(notice_letter, tmp_path: Path, text: str) -> None:
+    s = extract(notice_letter(tmp_path, date_text=text))
+    assert [b.lines[0] for b in s.blocks_with("date")] == [text]
+
+
+def test_placeholders_and_greetings_are_not_headings(tmp_path: Path) -> None:
+    from reportlab.pdfgen import canvas
+
+    pdf = tmp_path / "verify.pdf"
+    c = canvas.Canvas(str(pdf), pagesize=(612, 792), invariant=1)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(72, 792 - 150, "[Name of Account Holder]")
+    c.drawString(72, 792 - 190, "Warm greetings,")
+    c.setFont("Helvetica", 10)
+    c.drawString(72, 792 - 230, "Dear Customer,")
+    c.showPage()
+    c.save()
+    assert not extract(pdf).blocks_with("subject")

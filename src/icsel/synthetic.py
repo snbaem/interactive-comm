@@ -87,6 +87,7 @@ class LetterSpec:
     tagline: str = "Water | Power | Service"
     footer: str = COMPANY_FOOTER
     subject_prefix: str = "Subject: "
+    subject_bold: bool = True
     salutation: str = "Dear Customer,"
     body: list[str] | None = None  # explicit paragraphs; None = generated from a seed
     closing: str = "Kind regards,"
@@ -209,8 +210,9 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     _draw_lines(c, page_h, z.x, z.y, spec.address)
 
     z = _zone(layout, "subject", spec)
-    subj = simpleSplit(f"{spec.subject_prefix}{spec.subject}", FONT_BOLD, SIZE, z.width)
-    _draw_lines(c, page_h, z.x, z.y, subj, font=FONT_BOLD)
+    subj_font = FONT_BOLD if spec.subject_bold else FONT
+    subj = simpleSplit(f"{spec.subject_prefix}{spec.subject}", subj_font, SIZE, z.width)
+    _draw_lines(c, page_h, z.x, z.y, subj, font=subj_font)
 
     body = _zone(layout, "body", spec)
     top = _draw_lines(c, page_h, body.x, body.y, [spec.salutation]) + PARA_GAP

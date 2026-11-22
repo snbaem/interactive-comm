@@ -197,13 +197,14 @@ def test_prompt_templates_render_and_can_be_overridden(
 
 # ------------------------------------------------------------------ end to end
 def _letter_without_subject_prefix(tmp_path: Path, layouts: list[LayoutProfile]) -> Path:
-    """Subject printed without "Subject:" so the rules cannot recognise it."""
+    """Subject in plain text without "Subject:", so the rules cannot recognise it."""
     spec = LetterSpec(
         "no-prefix",
         "subject-right",
         ADDRESSES["short"],
         "Planned maintenance next month",
         subject_prefix="",
+        subject_bold=False,
     )
     layout = next(lay for lay in layouts if lay.id == "subject-right")
     return render_letter(spec, layout, tmp_path / "no-prefix.pdf")

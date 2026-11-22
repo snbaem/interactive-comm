@@ -65,12 +65,19 @@ def _is_icsel_mark(word: dict[str, Any]) -> bool:
 #: Roles that together make up the "body" area of a letter.
 BODY_ROLES = ("salutation", "body", "closing")
 
-_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
+_MONTHS = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?"
+    r"|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?"
+)
 _DATE_RE = re.compile(
-    rf"^\s*(\d{{1,2}}\s+({_MONTHS})\s+\d{{4}}|({_MONTHS})\s+\d{{1,2}},?\s+\d{{4}}"
+    rf"^\s*(\d{{1,2}}\s+{_MONTHS}\s+\d{{4}}|{_MONTHS}\s+\d{{1,2}},?\s+\d{{4}}"
     rf"|\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}[./]\d{{1,2}}[./]\d{{2,4}})\s*$",
     re.IGNORECASE,
 )
+#: A template placeholder for the letter date, e.g. "[Date]" or "[Letter Date]".
+_DATE_PLACEHOLDER_RE = re.compile(r"^\s*\[[^\]]*\bdate\b[^\]]*\]\s*$", re.IGNORECASE)
+#: A line that is only a placeholder, e.g. "[Name of Account Holder]".
+_PLACEHOLDER_RE = re.compile(r"^\s*\[[^\]]*\]\s*[,.]?\s*$")
 _SUBJECT_RE = re.compile(r"^\s*(subject|re|regarding)\s*:", re.IGNORECASE)
 _SALUTATION_RE = re.compile(r"^\s*(dear|hello|hi|to whom it may concern)\b", re.IGNORECASE)
 _CLOSING_RE = re.compile(
@@ -159,7 +166,7 @@ class LetterStructure:
         below the header blocks (address, subject, date) and above the end of
         the closing, such as a heading or a table at the top of the body.
         """
-        found = self._body_blocks() if role == "body" else self.blocks_with(role, page=1)[:1]
+        found = self.body_blocks() if role == "body" else self.blocks_with(role, page=1)[:1]
         if not found:
             return None
         x0 = min(b.x for b in found)
@@ -171,7 +178,8 @@ class LetterStructure:
             x0, y0, x1 - x0, y1 - y0, lines, page=1, bold=all(b.bold for b in found), role=role
         )
 
-    def _body_blocks(self) -> list[Block]:
+    def body_blocks(self) -> list[Block]:
+        """Page-1 blocks that make up the body area (see :meth:`region`)."""
         core = self.blocks_with(*BODY_ROLES, page=1)
         if not core:
             return []
@@ -248,16 +256,26 @@ def _blocks(segs: list[_Seg], page: int) -> list[Block]:
         target = None
         for blk, last_h in open_blocks:
             gap = s.top - blk.bottom
+            # A bold first line followed by regular lines stays together: the usual
+            # "bold recipient name above the address" pattern. A bold "Subject:" line
+            # never absorbs the text under it.
+            bold_name_line = (
+                blk.bold
+                and not s.bold
+                and len(blk.lines) == 1
+                and not _SUBJECT_RE.match(blk.lines[0])
+            )
             if (
                 abs(s.x0 - blk.x) <= ALIGN_TOLERANCE
                 and -1.0 <= gap <= LINE_GAP_RATIO * max(h, last_h)
-                and s.bold == blk.bold
+                and (s.bold == blk.bold or bold_name_line)
             ):
                 target = blk
                 break
         if target is None:
             open_blocks.append((Block(s.x0, s.top, s.x1 - s.x0, h, [s.text], page, s.bold), h))
             continue
+        target.bold = target.bold and s.bold
         x1 = max(target.right, s.x1)
         target.x = min(target.x, s.x0)
         target.width = x1 - target.x
@@ -285,11 +303,28 @@ def _table_cells(blocks: list[Block]) -> set[int]:
     return cells
 
 
+def _looks_like_heading(b: Block) -> bool:
+    """A short bold or ALL-CAPS line such as "NOTICE OF PAST-DUE ACCOUNT".
+
+    Excludes lone placeholders ("[Name of Account Holder]"), single words and
+    lines ending like a greeting or a label (",", ":" or ";").
+    """
+    text = b.text.strip()
+    if b.line_count > 3 or len(re.findall(r"[A-Za-z]{2,}", text)) < 2:
+        return False
+    if _PLACEHOLDER_RE.match(text) or text.endswith((",", ":", ";")):
+        return False
+    letters = [c for c in text if c.isalpha()]
+    mostly_caps = bool(letters) and sum(c.isupper() for c in letters) / len(letters) > 0.8
+    return b.bold or mostly_caps
+
+
 def _classify(blocks: list[Block], page_h: float) -> None:
     """Assign roles in place. ``blocks`` is in reading order across pages."""
     salutation_seen = False
     closing_seen = False
     address_seen = False
+    subject_seen = False
     cells = _table_cells(blocks)
     for b in blocks:
         first = b.lines[0]
@@ -310,10 +345,21 @@ def _classify(blocks: list[Block], page_h: float) -> None:
             salutation_seen = True
         elif in_table:
             b.role = "unknown"  # a date or name inside a table is data, not the letter's date
-        elif b.line_count == 1 and _DATE_RE.match(first):
+        elif b.line_count == 1 and (_DATE_RE.match(first) or _DATE_PLACEHOLDER_RE.match(first)):
             b.role = "date"
         elif _SUBJECT_RE.match(first):
             b.role = "subject"
+            subject_seen = True
+        elif (
+            not subject_seen
+            and b.page == 1
+            and (b.line_count == 1 or address_seen)
+            and _looks_like_heading(b)
+        ):
+            # A heading above the greeting states what the letter is about. Before the
+            # address only one-line headings count, so a bold address is not taken.
+            b.role = "subject"
+            subject_seen = True
         elif not address_seen and b.line_count >= 2 and b.page == 1:
             b.role = "address"
             address_seen = True

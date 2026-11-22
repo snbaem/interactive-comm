@@ -163,9 +163,10 @@ class Placement:
     Attributes:
         zoned: Page-1 blocks drawn into the zone of their role.
         flow: Every other block, in reading order, poured into the body area.
-        unplaced: The blocks in ``flow`` that are not body content (``unknown``
-            blocks, extra blocks of a zoned role, or roles the layout has no zone
-            for). They are shown, but the layout does not account for them.
+        unplaced: The blocks in ``flow`` that are not body content: ``unknown``
+            blocks outside the body area, extra blocks of a zoned role, or roles
+            the layout has no zone for. They are shown, but the layout does not
+            account for them.
     """
 
     zoned: dict[str, list[Block]]
@@ -194,7 +195,10 @@ def plan_placement(letter: LetterStructure, layout: LayoutProfile) -> Placement:
             zoned.setdefault(b.role, []).append(b)
             continue
         flow.append(b)
-    unplaced = [b for b in flow if b.role not in FLOW_ROLES]
+    # Unknown blocks inside the body area (e.g. a table under the address) are body
+    # content; only the rest has no place in this layout.
+    in_body = {id(b) for b in letter.body_blocks()}
+    unplaced = [b for b in flow if b.role not in FLOW_ROLES and id(b) not in in_body]
     return Placement(zoned, flow, unplaced)
 
 
@@ -258,12 +262,15 @@ def _flow_story(placement: Placement, width: float, mark: bool) -> list[Flowable
 
 
 def _draw_letterhead(c: Canvas, page_h: float, zone: Zone, blocks: list[Block]) -> None:
+    # First line (the sender's name) large and bold; contact lines small. Every line
+    # is wrapped to the zone width so long contact lines stay on the page.
     top = zone.y
-    for n, b in enumerate(blocks):
-        size = 14.0 if n == 0 else 8.5
-        c.setFont("Helvetica-Bold" if (n == 0 or b.bold) else "Helvetica", size)
-        for line in b.lines:
-            c.drawString(zone.x, page_h - top - size * 0.85, line)
+    lines = [ln for b in blocks for ln in b.lines]
+    for n, line in enumerate(lines):
+        font, size = ("Helvetica-Bold", 14.0) if n == 0 else ("Helvetica", 8.5)
+        c.setFont(font, size)
+        for part in simpleSplit(line, font, size, zone.width) or [""]:
+            c.drawString(zone.x, page_h - top - size * 0.85, part)
             top += size + 3
 
 
@@ -310,9 +317,13 @@ def render_sample(
 
     def fidelity_footer(c: Canvas) -> None:
         c.saveState()
-        c.setFont(DIAGNOSTIC_FONT + "-Oblique", 7)
+        font = DIAGNOSTIC_FONT + "-Oblique"
+        c.setFont(font, 7)
         c.setFillColor(colors.HexColor("#555555"))
-        c.drawCentredString(page_w / 2, 18, note)
+        # Courier is wide: wrap so the whole notice stays on the page.
+        lines = simpleSplit(note, font, 7, page_w - 72)
+        for i, line in enumerate(lines):
+            c.drawCentredString(page_w / 2, 4 + 8 * (len(lines) - 1 - i), line)
         c.restoreState()
 
     def on_first(c: Canvas, _doc: object) -> None:

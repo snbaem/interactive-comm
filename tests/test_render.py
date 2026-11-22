@@ -80,13 +80,8 @@ def test_plan_places_every_block(layouts: list[LayoutProfile]) -> None:
     plan = plan_placement(letter, _layout(layouts, "classic-left"))
     shown = {id(b) for bs in plan.zoned.values() for b in bs} | {id(b) for b in plan.flow}
     assert shown == {id(b) for b in letter.blocks}
-    assert {b.lines[0] for b in plan.unplaced} == {
-        "NOTICE OF CHANGE",
-        "Account",
-        "Amount due",
-        "0000-0001",
-        "12.34",
-    }
+    # The heading above the address has no box; the table under it is body content.
+    assert {b.lines[0] for b in plan.unplaced} == {"NOTICE OF CHANGE"}
 
 
 def test_unknown_blocks_and_tables_appear_in_sample(
@@ -162,3 +157,15 @@ def test_clean_sample_reads_back(
     letter = extract(letters_dir / "L04-subject-right-3line.pdf")
     clean = render_sample(letter, layout, tmp_path / "clean.pdf", show_zones=False)
     assert score_layout(extract(clean), layout).score > 0.95
+
+
+def test_preview_puts_heading_and_date_in_their_boxes(
+    notice_letter, tmp_path: Path, layouts: list[LayoutProfile]
+) -> None:
+    letter = extract(notice_letter(tmp_path))
+    for layout in layouts:
+        plan = plan_placement(letter, layout)
+        assert plan.zoned["subject"][0].lines[0] == "NOTICE OF PAST-DUE ACCOUNT", layout.id
+        assert plan.zoned["date"][0].lines[0] == "[Date]", layout.id
+        assert plan.zoned["address"][0].line_count == 3, layout.id
+        assert plan.unplaced == [], layout.id  # the table counts as body content

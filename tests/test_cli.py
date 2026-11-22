@@ -18,7 +18,7 @@ def test_match_writes_json_and_sample(letters_dir: Path, tmp_path: Path, capsys)
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["best_layout"] == "subject-right"
     with pdfplumber.open(tmp_path / "L04-subject-right-3line.sample.pdf") as pdf:
-        text = pdf.pages[0].extract_text()
+        text = " ".join(pdf.pages[0].extract_text().split())  # the notice may wrap
     assert "Not output from AEM Forms Interactive Communications" in text
 
 
