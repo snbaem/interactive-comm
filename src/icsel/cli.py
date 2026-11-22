@@ -18,12 +18,8 @@ from .inputs import InputError, collect_files, unique_stems
 from .match import MatchResult, rank
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
 from .render import render_sample
+from .report import APPROX_NOTE, build_result
 from .synthetic import generate
-
-APPROX_NOTE = (
-    "Note: the sample PDF is a local approximation for checking fit. "
-    "It is not AEM Forms Interactive Communications output."
-)
 
 EXIT_OK = 0
 EXIT_SOME_FAILED = 1
@@ -105,14 +101,7 @@ def cmd_match(args: argparse.Namespace) -> int:
             out_dir / f"{stems[pdf]}.sample.pdf",
             show_zones=not args.no_zones,
         )
-        result = {
-            "letter": letter.to_dict(),
-            "best_layout": best.layout_id,
-            "best_fits": best.fits,
-            "ranking": [r.to_dict() for r in results],
-            "sample_pdf": sample.as_posix(),
-            "fidelity": APPROX_NOTE,
-        }
+        result = build_result(letter, results, sample)
         json_path = out_dir / f"{stems[pdf]}.result.json"
         json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         _print_ranking(pdf.name, results)
@@ -165,6 +154,20 @@ def cmd_samples(args: argparse.Namespace) -> int:
     manifest = generate(args.out, args.layouts)
     count = len(json.loads(manifest.read_text(encoding="utf-8")))
     print(f"Wrote {count} synthetic letters and {manifest}")
+    return EXIT_OK
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the local browser UI."""
+    from .web import serve  # imported lazily: only this command needs the web module
+
+    layouts = load_profiles(args.layouts) if args.layouts else None
+    try:
+        serve(args.host, args.port, layouts, args.workdir, open_browser=args.open)
+    except OSError as exc:
+        where = f"{args.host}:{args.port}" if args.port is not None else args.host
+        print(f"error: cannot listen on {where} ({exc})", file=sys.stderr)
+        return EXIT_USAGE
     return EXIT_OK
 
 
@@ -223,6 +226,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--layouts", type=Path, help="layout folder (default: bundled examples)")
     s.set_defaults(func=cmd_samples)
+
+    w = sub.add_parser("serve", help="open a local browser UI to try letters and layouts")
+    w.add_argument("--host", default="127.0.0.1", help="address to listen on (default: 127.0.0.1)")
+    w.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port (default: 8765, or the next free one; 0 = any free port)",
+    )
+    w.add_argument("--layouts", action="append", type=Path, metavar="PATH", help=layouts_help)
+    w.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path("out") / "web",
+        help="folder for uploads and results (default: out/web)",
+    )
+    w.add_argument("--open", action="store_true", help="open the UI in your default browser")
+    w.set_defaults(func=cmd_serve)
     return p
 
 

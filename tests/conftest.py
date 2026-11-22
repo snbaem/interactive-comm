@@ -11,16 +11,31 @@ import pytest
 from icsel.profile import LayoutProfile, default_layouts_dir, load_profiles
 from icsel.synthetic import generate
 
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_real_connect = socket.socket.connect
+_real_create_connection = socket.create_connection
+
+
+def _is_loopback(address: object) -> bool:
+    return isinstance(address, tuple) and bool(address) and str(address[0]) in _LOOPBACK
+
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail any test that tries to open a network connection."""
+    """Fail any test that opens a network connection, except to this machine (loopback)."""
 
-    def guard(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("network access is not allowed in tests")
+    def guard_connect(sock: socket.socket, address: object) -> None:
+        if not _is_loopback(address):
+            raise RuntimeError(f"network access is not allowed in tests: {address!r}")
+        _real_connect(sock, address)
 
-    monkeypatch.setattr(socket.socket, "connect", guard)
-    monkeypatch.setattr(socket, "create_connection", guard)
+    def guard_create(address: object, *args: object, **kwargs: object) -> socket.socket:
+        if not _is_loopback(address):
+            raise RuntimeError(f"network access is not allowed in tests: {address!r}")
+        return _real_create_connection(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guard_connect)
+    monkeypatch.setattr(socket, "create_connection", guard_create)
 
 
 @pytest.fixture(scope="session")

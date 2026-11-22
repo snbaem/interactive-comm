@@ -82,6 +82,17 @@ class LetterSpec:
     offsets: dict[str, tuple[float, float]] = field(default_factory=dict)
     seed: int = 1
     note: str = ""
+    # Letter "branding" and wording. Defaults give a Brightwater Utilities letter.
+    company: str = COMPANY
+    tagline: str = "Water | Power | Service"
+    footer: str = COMPANY_FOOTER
+    subject_prefix: str = "Subject: "
+    salutation: str = "Dear Customer,"
+    body: list[str] | None = None  # explicit paragraphs; None = generated from a seed
+    closing: str = "Kind regards,"
+    signer: list[str] = field(
+        default_factory=lambda: ["Riley Placeholder", "Customer Care, Brightwater Utilities"]
+    )
 
 
 LETTERS: list[LetterSpec] = [
@@ -163,14 +174,14 @@ def _draw_lines(
     return top + len(lines) * LEADING
 
 
-def _chrome(c: canvas.Canvas, page_h: float, first: bool) -> None:
+def _chrome(c: canvas.Canvas, page_h: float, spec: LetterSpec, first: bool) -> None:
     if first:
         c.setFont(FONT_BOLD, 16)
-        c.drawString(54, _baseline(page_h, 38, 16), COMPANY)
+        c.drawString(54, _baseline(page_h, 38, 16), spec.company)
         c.setFont(FONT, 8)
-        c.drawString(54, _baseline(page_h, 60, 8), "Water | Power | Service")
+        c.drawString(54, _baseline(page_h, 60, 8), spec.tagline)
     c.setFont(FONT, 7)
-    c.drawString(54, _baseline(page_h, 760, 7), COMPANY_FOOTER)
+    c.drawString(54, _baseline(page_h, 760, 7), spec.footer)
 
 
 def _zone(layout: LayoutProfile, role: str, spec: LetterSpec) -> Zone:
@@ -188,7 +199,7 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     c = canvas.Canvas(str(out), pagesize=LETTER, invariant=1)
     c.setTitle(f"Synthetic letter {spec.id}")
     c.setAuthor("icsel synthetic data (fictional)")
-    _chrome(c, page_h, first=True)
+    _chrome(c, page_h, spec, first=True)
 
     if spec.date:
         z = _zone(layout, "date", spec)
@@ -198,22 +209,21 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     _draw_lines(c, page_h, z.x, z.y, spec.address)
 
     z = _zone(layout, "subject", spec)
-    subj = simpleSplit(f"Subject: {spec.subject}", FONT_BOLD, SIZE, z.width)
+    subj = simpleSplit(f"{spec.subject_prefix}{spec.subject}", FONT_BOLD, SIZE, z.width)
     _draw_lines(c, page_h, z.x, z.y, subj, font=FONT_BOLD)
 
     body = _zone(layout, "body", spec)
-    top = _draw_lines(c, page_h, body.x, body.y, ["Dear Customer,"]) + PARA_GAP
-    blocks = [
-        simpleSplit(p, FONT, SIZE, body.width) for p in _paragraphs(spec.paragraphs, spec.seed)
-    ]
-    blocks.append(["Kind regards,"])
-    blocks.append(["Riley Placeholder", "Customer Care, Brightwater Utilities"])
+    top = _draw_lines(c, page_h, body.x, body.y, [spec.salutation]) + PARA_GAP
+    paragraphs = spec.body if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
+    blocks = [simpleSplit(p, FONT, SIZE, body.width) for p in paragraphs]
+    blocks.append([spec.closing])
+    blocks.append(list(spec.signer))
     bottom = body.bottom
     for lines in blocks:
         for line in lines:
             if top + LEADING > bottom:
                 c.showPage()
-                _chrome(c, page_h, first=False)
+                _chrome(c, page_h, spec, first=False)
                 top, bottom = 72.0, page_h - 72.0
             _draw_lines(c, page_h, body.x, top, [line])
             top += LEADING

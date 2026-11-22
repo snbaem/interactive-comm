@@ -53,12 +53,33 @@ icsel profile samples/letters/L01-classic.pdf
 `out/`: `<letter>.result.json` (detected blocks and per-layout scores) and
 `<letter>.sample.pdf`.
 
+## Browser UI
+
+```bash
+icsel serve --open
+```
+
+This starts a small local web app at <http://127.0.0.1:8765/>. If that port is
+busy, it uses the next free one and prints the address. You can:
+
+- click a synthetic sample letter, or drop your own text-based PDF;
+- see the ranking with each layout's hard-check failures and per-block offsets;
+- view the source letter with its detected blocks and the layout zones drawn on top,
+  beside the sample rendered in that layout;
+- click any layout in the ranking to render the letter in it instead.
+
+The server uses only the Python standard library. It listens on `127.0.0.1` and
+makes no outbound calls. Uploads and results go to `out/web/`. Stop it with
+Ctrl+C. Do not expose it with `--host 0.0.0.0` on a shared network: it has no
+authentication.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. Options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--no-zones`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
+| `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`). |
 | `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). |
 
 `PATH` can be a file, a folder or a glob pattern such as `letters/*.pdf`. icsel

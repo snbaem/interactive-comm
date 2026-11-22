@@ -51,7 +51,7 @@ version = { attr = "icsel.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-icsel = ["py.typed", "data/layouts/*.json"]
+icsel = ["py.typed", "data/layouts/*.json", "data/web/*.html"]
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]
