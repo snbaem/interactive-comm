@@ -1,39 +1,104 @@
-# icsel — layout selector for letter PDFs (v1 prototype)
+# icsel: pick a layout for a letter PDF
 
-Local prototype for AEM Forms Interactive Communications (IC) users. Given a
-text-based letter PDF, `icsel` picks the best-fitting layout from a small set of
-layout profiles and renders a sample PDF of the letter in that layout.
+[![CI](https://github.com/snbaem/interactive-comm/actions/workflows/ci.yml/badge.svg)](https://github.com/snbaem/interactive-comm/actions/workflows/ci.yml)
 
-> **Not an official Adobe project.** Product names are used only to describe
-> compatibility.
+`icsel` is a local prototype for AEM Forms Interactive Communications (IC) users.
+Given a text-based letter PDF, it picks the best-fitting layout from a small set
+of layout profiles and renders a sample PDF of the letter in that layout.
+Layouts differ in where boxes sit and how big they are, for example a subject
+box on the right or a taller address box.
+
+> **Not an official Adobe project.** It is not affiliated with, endorsed by or
+> supported by Adobe. Product names are used only to describe compatibility.
 >
 > **Fidelity:** the sample PDF is a local approximation for checking fit. It is
 > not AEM Forms Interactive Communications output.
 
-All data in this repository is synthetic. The company, Brightwater Utilities,
-is fictional, as are every name, address and account number.
+All data in this repository is synthetic. The company, *Brightwater Utilities*,
+is fictional, and so is every name, address and account number.
 
-## Try it (v1, no packaging yet)
+## Quick start
+
+Requires Python 3.10 or newer. It runs entirely offline.
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/snbaem/interactive-comm.git
+cd interactive-comm
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+icsel samples
+icsel match samples\letters\L04-subject-right-3line.pdf
+icsel match samples\letters
+icsel profile samples\letters\L01-classic.pdf
+```
+
+**macOS / Linux (bash)**
 
 ```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Windows; use .venv/bin/python on macOS/Linux
-python scripts/make_synthetic.py                           # writes samples/letters/*.pdf
-PYTHONPATH=src python -m icsel match samples/letters/L04-subject-right-3line.pdf
-PYTHONPATH=src python -m icsel profile samples/letters/L01-classic.pdf
-python -m pytest
+git clone https://github.com/snbaem/interactive-comm.git
+cd interactive-comm
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+icsel samples
+icsel match samples/letters/L04-subject-right-3line.pdf
+icsel match samples/letters
+icsel profile samples/letters/L01-classic.pdf
 ```
+
+`icsel match` prints a ranking per letter and writes two files per letter to
+`out/`: `<letter>.result.json` (detected blocks and per-layout scores) and
+`<letter>.sample.pdf`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. Options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--no-zones`. |
+| `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
+| `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). |
+
+`PATH` can be a file, a folder or a glob pattern such as `letters/*.pdf`. icsel
+expands patterns itself, so they work the same in PowerShell, cmd.exe and bash.
+File extensions are matched case-insensitively. If a PDF cannot be read, icsel
+reports it and moves on to the next file.
 
 ## How it works
 
-1. `extract.py` reads words and positions with pdfplumber, groups them into
-   blocks and classifies each block (letterhead, date, address, subject,
-   salutation, body, closing, footer, unknown) with simple rules.
-2. `match.py` scores each layout profile in `layouts/` by how close each
-   letter block sits to its zone and how much of it falls inside, after hard
-   checks (line capacity, width, required zones).
+1. `extract.py` reads words and their positions with pdfplumber, groups them
+   into blocks, and labels each block with simple rules: letterhead, date,
+   address, subject, salutation, body, closing, footer or unknown.
+2. `match.py` scores each layout profile by how close each block sits to its
+   zone and how much of it falls inside. Hard checks run first: line capacity,
+   width, and required zones.
 3. `render.py` draws the letter's text into the winning layout's zones with
    reportlab.
 
-Layout profiles are JSON files in points with a top-left origin; see
-`layouts/classic-left.json`.
+Layout profiles are JSON files. Measurements are in points, from the top-left
+corner of the page. The bundled examples are in
+[`src/icsel/data/layouts/`](src/icsel/data/layouts/classic-left.json).
+
+## Development
+
+```bash
+ruff check .
+ruff format --check .
+pytest
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access.
+
+## Limitations
+
+- Only text-based PDFs work. Scanned or image-only PDFs are reported, not read
+  with OCR.
+- Block detection is rule-based and tuned for typical business letters.
+- The sample PDF approximates placement only. It does not reproduce IC fonts,
+  fragments, data binding or pagination.
+
+## License
+
+[Apache License 2.0](LICENSE).

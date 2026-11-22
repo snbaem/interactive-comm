@@ -27,8 +27,9 @@ FIDELITY_NOTE = (
 _BODY = ParagraphStyle("body", fontName="Helvetica", fontSize=10, leading=12, spaceAfter=8)
 
 
-def _draw_zone_text(c: Canvas, page_h: float, zone: Zone, lines: list[str], bold: bool = False,
-                    size: float = 10.0) -> None:
+def _draw_zone_text(
+    c: Canvas, page_h: float, zone: Zone, lines: list[str], bold: bool = False, size: float = 10.0
+) -> None:
     font = "Helvetica-Bold" if bold else "Helvetica"
     wrapped: list[str] = []
     for line in lines:
@@ -52,8 +53,9 @@ def _draw_outline(c: Canvas, page_h: float, zone: Zone) -> None:
     c.restoreState()
 
 
-def render_sample(letter: LetterStructure, layout: LayoutProfile, out: Path,
-                  show_zones: bool = True) -> Path:
+def render_sample(
+    letter: LetterStructure, layout: LayoutProfile, out: Path, show_zones: bool = True
+) -> Path:
     """Write a sample PDF of ``letter`` laid out with ``layout``. Returns ``out``."""
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -61,10 +63,28 @@ def render_sample(letter: LetterStructure, layout: LayoutProfile, out: Path,
     note = FIDELITY_NOTE.format(layout=layout.id)
 
     body_zone = layout.zone("body") or Zone("body", 72, 144, page_w - 144, page_h - 216)
-    first_frame = Frame(body_zone.x, page_h - body_zone.bottom, body_zone.width, body_zone.height,
-                        leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0, id="first")
-    later_frame = Frame(body_zone.x, 72, body_zone.width, page_h - 144,
-                        leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0, id="later")
+    first_frame = Frame(
+        body_zone.x,
+        page_h - body_zone.bottom,
+        body_zone.width,
+        body_zone.height,
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+        id="first",
+    )
+    later_frame = Frame(
+        body_zone.x,
+        72,
+        body_zone.width,
+        page_h - 144,
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+        id="later",
+    )
 
     def footer(c: Canvas) -> None:
         c.saveState()
@@ -91,12 +111,19 @@ def render_sample(letter: LetterStructure, layout: LayoutProfile, out: Path,
     def on_later(c: Canvas, _doc: object) -> None:
         footer(c)
 
-    doc = BaseDocTemplate(str(out), pagesize=(page_w, page_h), invariant=1,
-                          title=f"icsel sample - {layout.id}", author="icsel (local approximation)")
-    doc.addPageTemplates([
-        PageTemplate("first", [first_frame], onPage=on_first, autoNextPageTemplate="later"),
-        PageTemplate("later", [later_frame], onPage=on_later),
-    ])
+    doc = BaseDocTemplate(
+        str(out),
+        pagesize=(page_w, page_h),
+        invariant=1,
+        title=f"icsel sample - {layout.id}",
+        author="icsel (local approximation)",
+    )
+    doc.addPageTemplates(
+        [
+            PageTemplate("first", [first_frame], onPage=on_first, autoNextPageTemplate="later"),
+            PageTemplate("later", [later_frame], onPage=on_later),
+        ]
+    )
     story: list = []
     for b in letter.blocks_with("salutation", "body", "closing"):
         # closing/signature lines keep their line breaks; prose is reflowed

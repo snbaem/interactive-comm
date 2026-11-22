@@ -1,27 +1,29 @@
-"""Generate the synthetic Brightwater Utilities letters into samples/letters/.
+"""Generate the synthetic Brightwater Utilities letters.
 
-Usage (from the repository root):
+Same as ``icsel samples``; kept as a script for readers who browse ``scripts/``.
 
-    python scripts/make_synthetic.py [--layouts layouts] [--out samples/letters]
+Usage (from the repository root, after ``pip install -e .``)::
+
+    python scripts/make_synthetic.py [--out samples/letters] [--layouts PATH]
+
+All names, addresses and text produced are fictional.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from icsel.synthetic import generate  # noqa: E402
+from icsel.synthetic import generate
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--layouts", type=Path, default=Path("layouts"))
-    p.add_argument("--out", type=Path, default=Path("samples/letters"))
+    """Parse arguments and write the letters plus ``manifest.json``."""
+    p = argparse.ArgumentParser(description="Generate synthetic sample letters.")
+    p.add_argument("--out", type=Path, default=Path("samples") / "letters")
+    p.add_argument("--layouts", type=Path, default=None, help="default: bundled layouts")
     args = p.parse_args()
-    manifest = generate(args.layouts, args.out)
+    manifest = generate(args.out, args.layouts)
     print(f"Wrote letters and {manifest}")
 
 

@@ -47,10 +47,19 @@ class RoleScore:
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view for JSON output."""
+
         def r(v: float | None) -> float | None:
             return None if v is None else round(v, 3)
-        return {"role": self.role, "score": r(self.score), "dx": r(self.dx), "dy": r(self.dy),
-                "closeness": r(self.closeness), "overlap": r(self.overlap), "note": self.note}
+
+        return {
+            "role": self.role,
+            "score": r(self.score),
+            "dx": r(self.dx),
+            "dy": r(self.dy),
+            "closeness": r(self.closeness),
+            "overlap": r(self.overlap),
+            "note": self.note,
+        }
 
 
 @dataclass
@@ -66,9 +75,14 @@ class MatchResult:
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view for JSON output."""
-        return {"layout_id": self.layout_id, "layout_name": self.layout_name,
-                "score": round(self.score, 4), "fits": self.fits, "failures": self.failures,
-                "roles": [r.to_dict() for r in self.roles]}
+        return {
+            "layout_id": self.layout_id,
+            "layout_name": self.layout_name,
+            "score": round(self.score, 4),
+            "fits": self.fits,
+            "failures": self.failures,
+            "roles": [r.to_dict() for r in self.roles],
+        }
 
 
 def _overlap_fraction(block: Block, zone: Zone) -> float:

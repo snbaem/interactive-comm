@@ -147,8 +147,15 @@ def _baseline(page_h: float, top: float, size: float = SIZE) -> float:
     return page_h - top - size * 0.8
 
 
-def _draw_lines(c: canvas.Canvas, page_h: float, x: float, top: float, lines: list[str],
-                font: str = FONT, size: float = SIZE) -> float:
+def _draw_lines(
+    c: canvas.Canvas,
+    page_h: float,
+    x: float,
+    top: float,
+    lines: list[str],
+    font: str = FONT,
+    size: float = SIZE,
+) -> float:
     """Draw lines starting at ``top`` (top-left coords). Return the next free top."""
     c.setFont(font, size)
     for i, line in enumerate(lines):
@@ -196,7 +203,9 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
 
     body = _zone(layout, "body", spec)
     top = _draw_lines(c, page_h, body.x, body.y, ["Dear Customer,"]) + PARA_GAP
-    blocks = [simpleSplit(p, FONT, SIZE, body.width) for p in _paragraphs(spec.paragraphs, spec.seed)]
+    blocks = [
+        simpleSplit(p, FONT, SIZE, body.width) for p in _paragraphs(spec.paragraphs, spec.seed)
+    ]
     blocks.append(["Kind regards,"])
     blocks.append(["Riley Placeholder", "Customer Care, Brightwater Utilities"])
     bottom = body.bottom
@@ -214,18 +223,28 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     return out
 
 
-def generate(layouts_dir: Path, out_dir: Path, letters: list[LetterSpec] | None = None) -> Path:
-    """Render all synthetic letters into ``out_dir`` and write ``manifest.json``.
+def generate(
+    out_dir: Path,
+    layouts: Path | None = None,
+    letters: list[LetterSpec] | None = None,
+) -> Path:
+    """Render the synthetic letters into ``out_dir`` and write ``manifest.json``.
 
-    Returns the manifest path. The manifest maps each letter file to its
-    planted expected layout.
+    Args:
+        out_dir: Folder for the letter PDFs and the manifest (created if needed).
+        layouts: Folder of layout profiles; defaults to the bundled examples.
+        letters: Letter recipes; defaults to :data:`LETTERS`.
+
+    Returns:
+        Path of ``manifest.json``, which maps each letter file to its planted
+        expected layout.
     """
-    layouts = {p.id: p for p in load_profiles(layouts_dir)}
+    by_id = {p.id: p for p in load_profiles(layouts)}
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
     for spec in letters or LETTERS:
-        pdf = render_letter(spec, layouts[spec.layout], out_dir / f"{spec.id}.pdf")
+        pdf = render_letter(spec, by_id[spec.layout], out_dir / f"{spec.id}.pdf")
         manifest.append({"file": pdf.name, "expected_layout": spec.layout, "note": spec.note})
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

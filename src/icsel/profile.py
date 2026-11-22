@@ -9,9 +9,12 @@ points (1/72 inch) with the origin at the TOP-LEFT corner of the page and
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .inputs import InputError, collect_files
 
 PROFILE_VERSION = 1
 
@@ -136,10 +139,36 @@ def load_profile(path: Path) -> LayoutProfile:
         return profile_from_dict(json.load(fh), source=str(path))
 
 
-def load_profiles(directory: Path) -> list[LayoutProfile]:
-    """Load every ``*.json`` profile in ``directory``, sorted by file name."""
-    directory = Path(directory)
-    profiles = [load_profile(p) for p in sorted(directory.glob("*.json"))]
-    if not profiles:
-        raise ProfileError(f"no layout profiles (*.json) found in {directory}")
+def default_layouts_dir() -> Path:
+    """Folder of the example layout profiles bundled with the package."""
+    return Path(__file__).resolve().parent / "data" / "layouts"
+
+
+def load_profiles(sources: Path | str | Iterable[Path | str] | None = None) -> list[LayoutProfile]:
+    """Load layout profiles from files, folders or glob patterns.
+
+    Args:
+        sources: One path or several. Folders contribute their ``*.json`` files
+            (sorted by name). ``None`` loads the bundled example layouts.
+
+    Raises:
+        ProfileError: If nothing is found, a file is invalid, or two profiles
+            share an ``id``.
+    """
+    if sources is None:
+        sources = [default_layouts_dir()]
+    elif isinstance(sources, (str, Path)):
+        sources = [sources]
+    try:
+        files = collect_files(sources, ".json")
+    except InputError as exc:
+        raise ProfileError(f"layout profiles: {exc}") from exc
+    profiles: list[LayoutProfile] = []
+    seen: dict[str, Path] = {}
+    for f in files:
+        prof = load_profile(f)
+        if prof.id in seen:
+            raise ProfileError(f"duplicate layout id {prof.id!r} in {seen[prof.id]} and {f}")
+        seen[prof.id] = f
+        profiles.append(prof)
     return profiles

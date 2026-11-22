@@ -1,7 +1,32 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Tool caches
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Generated output (regenerate with `icsel samples` / `icsel match`)
 out/
+profiles/
 samples/letters/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

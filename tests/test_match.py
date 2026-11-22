@@ -7,8 +7,9 @@ from icsel.match import rank, score_layout
 from icsel.profile import LayoutProfile
 
 
-def test_best_layout_is_planted_layout(letters_dir: Path, manifest: list[dict],
-                                       layouts: list[LayoutProfile]) -> None:
+def test_best_layout_is_planted_layout(
+    letters_dir: Path, manifest: list[dict], layouts: list[LayoutProfile]
+) -> None:
     for entry in manifest:
         best = rank(extract(letters_dir / entry["file"]), layouts)[0]
         assert best.layout_id == entry["expected_layout"], entry["file"]

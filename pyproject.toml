@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icsel"
+dynamic = ["version"]
+description = "Pick the best-fitting layout template for a text-based letter PDF (local prototype for AEM Forms Interactive Communications users; not an official Adobe project)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "icsel contributors" }]
+keywords = ["pdf", "layout", "letters", "interactive-communications", "aem-forms"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Text Processing",
+]
+dependencies = [
+    "pdfplumber>=0.11",
+    "reportlab>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+icsel = "icsel.cli:main"
+
+[project.urls]
+Repository = "https://github.com/snbaem/interactive-comm"
+Issues = "https://github.com/snbaem/interactive-comm/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "icsel.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+icsel = ["py.typed", "data/layouts/*.json"]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "RUF",      # ruff-specific
+    "PTH",      # prefer pathlib over os.path
+    "ANN",      # type annotations
+    "D",        # docstrings
+]
+ignore = [
+    "D105",     # magic methods
+    "D107",     # __init__
+    "ANN401",   # Any is sometimes the honest type for parsed JSON
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN"]
+"scripts/**" = ["D103"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error::DeprecationWarning:icsel.*"]

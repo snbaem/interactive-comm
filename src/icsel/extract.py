@@ -35,9 +35,7 @@ FOOTER_MARGIN = 50.0
 #: Roles that together make up the "body" area of a letter.
 BODY_ROLES = ("salutation", "body", "closing")
 
-_MONTHS = (
-    "January|February|March|April|May|June|July|August|September|October|November|December"
-)
+_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
 _DATE_RE = re.compile(
     rf"^\s*(\d{{1,2}}\s+({_MONTHS})\s+\d{{4}}|({_MONTHS})\s+\d{{1,2}},?\s+\d{{4}}"
     rf"|\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}[./]\d{{1,2}}[./]\d{{2,4}})\s*$",
@@ -134,8 +132,9 @@ class LetterStructure:
         x1 = max(b.right for b in found)
         y1 = max(b.bottom for b in found)
         lines = [ln for b in found for ln in b.lines]
-        return Block(x0, y0, x1 - x0, y1 - y0, lines, page=1, bold=all(b.bold for b in found),
-                     role=role)
+        return Block(
+            x0, y0, x1 - x0, y1 - y0, lines, page=1, bold=all(b.bold for b in found), role=role
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view for JSON output."""
@@ -202,8 +201,11 @@ def _blocks(segs: list[_Seg], page: int) -> list[Block]:
         target = None
         for blk, last_h in open_blocks:
             gap = s.top - blk.bottom
-            if (abs(s.x0 - blk.x) <= ALIGN_TOLERANCE and -1.0 <= gap <= LINE_GAP_RATIO * max(h, last_h)
-                    and s.bold == blk.bold):
+            if (
+                abs(s.x0 - blk.x) <= ALIGN_TOLERANCE
+                and -1.0 <= gap <= LINE_GAP_RATIO * max(h, last_h)
+                and s.bold == blk.bold
+            ):
                 target = blk
                 break
         if target is None:
@@ -265,8 +267,9 @@ def extract(pdf_path: Path) -> LetterStructure:
         if not pdf.pages:
             raise ExtractionError(f"{pdf_path}: PDF has no pages")
         first = pdf.pages[0]
-        structure = LetterStructure(str(pdf_path), float(first.width), float(first.height),
-                                    len(pdf.pages))
+        structure = LetterStructure(
+            str(pdf_path), float(first.width), float(first.height), len(pdf.pages)
+        )
         for i, page in enumerate(pdf.pages, start=1):
             words = page.extract_words(extra_attrs=["fontname"], x_tolerance=1.5, y_tolerance=2)
             structure.blocks.extend(_blocks(_segments(words), i) if words else [])
