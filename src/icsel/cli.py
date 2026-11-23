@@ -1,4 +1,4 @@
-"""Command-line interface: ``icsel match``, ``icsel profile`` and ``icsel samples``.
+"""Command-line interface: ``icsel match``, ``profile``, ``portfolio``, ``serve`` and ``samples``.
 
 Every path argument accepts files, folders and glob patterns (expanded by
 icsel itself, so ``letters/*.pdf`` works in PowerShell and cmd.exe too).
@@ -19,12 +19,24 @@ from . import __version__
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
 from .llm import Assistant, LLMError, available_backends, get_assistant
-from .match import MatchResult
+from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
 from .pipeline import analyze
+from .portfolio import (
+    DUPLICATE_THRESHOLD,
+    STATUS_OK,
+    LetterRecord,
+    Settings,
+    find_duplicate_groups,
+    plan_ai,
+    run_ai,
+    scan,
+    write_csv,
+    write_markdown,
+)
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
 from .render import render_sample
 from .report import APPROX_NOTE, build_result
-from .synthetic import generate
+from .synthetic import generate, generate_portfolio
 
 EXIT_OK = 0
 EXIT_SOME_FAILED = 1
@@ -184,9 +196,90 @@ def cmd_profile(args: argparse.Namespace) -> int:
 
 def cmd_samples(args: argparse.Namespace) -> int:
     """Generate the synthetic Brightwater Utilities letters."""
-    manifest = generate(args.out, args.layouts)
+    if args.portfolio:
+        out = args.out or Path("samples") / "portfolio"
+        manifest = generate_portfolio(out, args.layouts)
+        what = "synthetic portfolio files (letters plus a few deliberate problem files)"
+    else:
+        out = args.out or Path("samples") / "letters"
+        manifest = generate(out, args.layouts)
+        what = "synthetic letters"
     count = len(json.loads(manifest.read_text(encoding="utf-8")))
-    print(f"Wrote {count} synthetic letters and {manifest}")
+    print(f"Wrote {count} {what} and {manifest}")
+    return EXIT_OK
+
+
+def _progress(label: str) -> Any:
+    """Return a callback that prints ``label i/n`` every 25 items and at the end."""
+
+    def show(done: int, total: int) -> None:
+        if done % 25 == 0 or done == total:
+            print(f"  {label} {done}/{total}", file=sys.stderr)
+
+    return show
+
+
+def _confirm(question: str) -> bool:
+    """Ask a yes/no question; anything but an interactive "y" or "yes" means no."""
+    if not sys.stdin.isatty():
+        print("Not an interactive terminal, so the AI step needs --yes.", file=sys.stderr)
+        return False
+    return input(question).strip().lower() in ("y", "yes")
+
+
+def _portfolio_ai_step(
+    args: argparse.Namespace,
+    assistant: Assistant,
+    records: list[LetterRecord],
+    layouts: list[LayoutProfile],
+    settings: Settings,
+) -> dict[str, Any]:
+    """Plan, estimate, confirm and run the AI step; return the summary for the report."""
+    _print_ai_notice(assistant)
+    plan = plan_ai(records, assistant)
+    print(
+        f"AI step plan: up to {plan.calls} model call(s) for {len(records)} letter(s): "
+        f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
+        "ambiguous, weak or no-fit letters. Letters that fit one layout cleanly make no call."
+    )
+    if plan.calls == 0:
+        line = "- Nothing to ask: no unknown blocks and no ambiguous, weak or no-fit letters."
+        return {"line": line}
+    if not (args.yes or _confirm("Proceed with the AI step? [y/N] ")):
+        print("Skipped the AI step; the report is rule-based only.")
+        return {"line": "- Skipped (not confirmed); the report is rule-based only."}
+    stopped = run_ai(plan, layouts, assistant, settings, _progress("AI"))
+    info = assistant.describe()
+    touched = len({id(r) for r in [*plan.classify, *plan.explain]})
+    line = f"- Ran {info['backend']} / {info['model']} on {touched} letter(s)."
+    return {"line": line, "stopped": stopped}
+
+
+def cmd_portfolio(args: argparse.Namespace) -> int:
+    """Match every letter in the given folders and write ``portfolio.csv`` and ``portfolio.md``."""
+    layouts = load_profiles(args.layouts)
+    paths = collect_files(args.letters, ".pdf", recursive=args.recursive)
+    settings = Settings(args.min_score, args.ambiguity_margin, args.duplicate_threshold)
+    assistant = get_assistant(args.llm)
+    print(f"Matching {len(paths)} PDF(s) against {len(layouts)} layout(s)...", file=sys.stderr)
+    records = scan(paths, layouts, settings, _progress("matched"))
+    groups = find_duplicate_groups(records, settings.duplicate_threshold)
+
+    ai_summary: dict[str, Any] | None = None
+    if assistant.enabled:
+        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings)
+
+    out: Path = args.out
+    csv_path = write_csv(records, out / "portfolio.csv")
+    md_path = write_markdown(records, groups, layouts, settings, out / "portfolio.md", ai_summary)
+    matched = sum(1 for r in records if r.status == STATUS_OK)
+    unreadable = len(records) - matched
+    print(f"Scanned {len(records)} PDF(s): {matched} matched, {unreadable} unreadable or no text.")
+    print(f"Wrote {csv_path} and {md_path}")
+    print(APPROX_NOTE)
+    if unreadable:
+        print(f"{unreadable} of {len(records)} file(s) could not be matched.", file=sys.stderr)
+        return EXIT_SOME_FAILED
     return EXIT_OK
 
 
@@ -267,12 +360,64 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("-r", "--recursive", action="store_true", help="also search subfolders")
     pr.set_defaults(func=cmd_profile)
 
+    po = sub.add_parser(
+        "portfolio", help="match a folder of letters and summarize layout fit, duplicates and gaps"
+    )
+    po.add_argument(
+        "letters",
+        nargs="+",
+        type=Path,
+        metavar="PATH",
+        help="letter PDF(s), folder(s) or glob pattern(s)",
+    )
+    po.add_argument("--layouts", action="append", type=Path, metavar="PATH", help=layouts_help)
+    po.add_argument(
+        "--out",
+        type=Path,
+        default=Path("out") / "portfolio",
+        help="output folder for portfolio.csv and portfolio.md (default: out/portfolio)",
+    )
+    po.add_argument("-r", "--recursive", action="store_true", help="also search subfolders")
+    po.add_argument(
+        "--min-score",
+        type=float,
+        default=LOW_FIT_THRESHOLD,
+        help=f"best score below this is a weak fit (default: {LOW_FIT_THRESHOLD})",
+    )
+    po.add_argument(
+        "--ambiguity-margin",
+        type=float,
+        default=TIE_MARGIN,
+        help="fitting layouts within this score of the best are a near-tie "
+        f"(default: {TIE_MARGIN})",
+    )
+    po.add_argument(
+        "--duplicate-threshold",
+        type=float,
+        default=DUPLICATE_THRESHOLD,
+        help="body-text similarity at or above which letters are near-duplicates "
+        f"(default: {DUPLICATE_THRESHOLD})",
+    )
+    po.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    po.add_argument(
+        "--yes",
+        action="store_true",
+        help="run the AI step without asking after the call estimate (needed when not interactive)",
+    )
+    po.set_defaults(func=cmd_portfolio)
+
     s = sub.add_parser("samples", help="generate synthetic sample letters")
     s.add_argument(
         "--out",
         type=Path,
-        default=Path("samples") / "letters",
-        help="output folder (default: samples/letters)",
+        default=None,
+        help="output folder (default: samples/letters, or samples/portfolio with --portfolio)",
+    )
+    s.add_argument(
+        "--portfolio",
+        action="store_true",
+        help="generate the larger demo folder for `icsel portfolio` instead: ~30 letters with "
+        "varied bodies plus deliberate problems (a duplicate, a no-fit letter, a scan, a bad file)",
     )
     s.add_argument("--layouts", type=Path, help="layout folder (default: bundled examples)")
     s.set_defaults(func=cmd_samples)
