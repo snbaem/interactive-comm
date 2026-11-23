@@ -208,14 +208,16 @@ class Difference:
         """True if nothing differs by more than :data:`DIFF_EPSILON`."""
         return all(abs(v) < DIFF_EPSILON for v in (self.dx, self.dy, self.dwidth, self.dheight))
 
-    def describe(self, units: str = "in", reference: str = "reference") -> str:
+    def describe(
+        self, units: str = "in", reference: str = "reference", include_size: bool = True
+    ) -> str:
         """Plain-language summary, e.g. ``subject 0.3" lower, 1.0" narrower than classic-left``."""
         parts: list[str] = []
         for value, plus, minus in (
             (self.dy, "lower", "higher"),
             (self.dx, "further right", "further left"),
-            (self.dwidth, "wider", "narrower"),
-            (self.dheight, "taller", "shorter"),
+            (self.dwidth if include_size else 0.0, "wider", "narrower"),
+            (self.dheight if include_size else 0.0, "taller", "shorter"),
         ):
             if abs(value) >= DIFF_EPSILON:
                 parts.append(f"{format_length(abs(value), units)} {plus if value > 0 else minus}")

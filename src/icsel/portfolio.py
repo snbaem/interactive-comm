@@ -40,9 +40,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import ScoringConfig
+from .dimensions import letter_vs_layout
 from .extract import ExtractionError, LetterStructure, NoTextError, extract
 from .llm import Assistant, LLMError, apply_suggestions, fit_facts
-from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
+from .match import CAPACITY_ROLES, LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
 from .profile import LayoutProfile
 
 #: Default similarity at or above which two letters count as near-duplicates.
@@ -62,6 +63,9 @@ FIT_GOOD = "good"
 FIT_WEAK = "weak"
 FIT_NONE = "none"
 
+#: Offsets smaller than this (points, 0.1 inch) are not worth listing.
+OFFSET_NOTICE_PT = 7.2
+
 CSV_COLUMNS = [
     "file",
     "status",
@@ -75,6 +79,7 @@ CSV_COLUMNS = [
     "tie_break",
     "closest_layout",
     "failures",
+    "offsets_vs_layout",
     "unknown_blocks",
     "duplicate_group",
     "ai_role_changes",
@@ -106,6 +111,8 @@ class LetterRecord:
     ai_changes: list[dict[str, Any]] = field(default_factory=list)
     ai_explanation: str | None = None
     ai_error: str = ""
+    #: Where the letter's boxes sit against the chosen (or closest) layout, in inches.
+    offsets: str = ""
 
 
 @dataclass
@@ -185,6 +192,12 @@ def assess(
         record.closest_layout = best.layout_id
         record.failures = list(best.failures)
         record.fit = FIT_NONE
+    chosen = next(lay for lay in layouts if lay.id == best.layout_id)
+    record.offsets = "; ".join(
+        d.describe("in", "layout", include_size=False)
+        for d in letter_vs_layout(letter, chosen)
+        if d.role in CAPACITY_ROLES and max(abs(d.dx), abs(d.dy)) >= OFFSET_NOTICE_PT
+    )
     return tb
 
 
@@ -402,6 +415,7 @@ def write_csv(records: Iterable[LetterRecord], path: Path) -> Path:
                 "tie_break": r.tie_note,
                 "closest_layout": r.closest_layout,
                 "failures": "; ".join(r.failures),
+                "offsets_vs_layout": r.offsets,
                 "unknown_blocks": r.unknown_blocks if r.status == STATUS_OK else "",
                 "duplicate_group": r.duplicate_group,
                 "ai_role_changes": len(r.ai_changes) if r.ai_changes else "",

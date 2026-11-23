@@ -102,6 +102,8 @@ def test_downloaded_sample_reads_back_as_the_same_letter(
 ) -> None:
     """Upload a preview PDF again: icsel's own labels are ignored and the fit stays high."""
     for entry in manifest:
+        if entry["expected_layout"] is None:
+            continue
         layout = _layout(layouts, entry["expected_layout"])
         letter = extract(letters_dir / entry["file"])
         sample = render_sample(letter, layout, tmp_path / entry["file"])

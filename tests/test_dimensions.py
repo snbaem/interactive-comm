@@ -138,3 +138,11 @@ def test_cli_show_layout_and_match_dimensions(tmp_path: Path, letters_dir: Path)
 
     doc = json.loads((m_out / f"{stem}.result.json").read_text(encoding="utf-8"))
     assert doc["explanation"] and doc["dimensions"]["layout"]["zones"]
+
+
+def test_portfolio_csv_lists_offsets(letters_dir: Path, layouts: list[LayoutProfile]) -> None:
+    from icsel.portfolio import scan
+
+    recs = {r.name: r for r in scan([letters_dir / "L13-subject-right-lower.pdf"], layouts)}
+    (rec,) = recs.values()
+    assert 'subject 0.56" lower than layout' in rec.offsets
