@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .config import ConfigError, load_config
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
 from .llm import Assistant, LLMError, available_backends, get_assistant
@@ -119,6 +120,7 @@ def _print_ai_result(llm: dict[str, Any]) -> None:
 def cmd_match(args: argparse.Namespace) -> int:
     """Rank layouts for each letter; write a result JSON and sample PDF per letter."""
     layouts = load_profiles(args.layouts)
+    scoring = load_config(args.config)
     by_id = {lay.id: lay for lay in layouts}
     letters = collect_files(args.letters, ".pdf", recursive=args.recursive)
     assistant = get_assistant(args.llm)
@@ -135,7 +137,7 @@ def cmd_match(args: argparse.Namespace) -> int:
             print(f"{pdf.name}\n  skipped: {exc}", file=sys.stderr)
             failed += 1
             continue
-        analysis = analyze(letter, layouts, assistant)
+        analysis = analyze(letter, layouts, assistant, scoring)
         results = analysis.results
         best = results[0]
         sample = render_sample(
@@ -259,7 +261,13 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     """Match every letter in the given folders and write ``portfolio.csv`` and ``portfolio.md``."""
     layouts = load_profiles(args.layouts)
     paths = collect_files(args.letters, ".pdf", recursive=args.recursive)
-    settings = Settings(args.min_score, args.ambiguity_margin, args.duplicate_threshold)
+    scoring = load_config(args.config)
+    settings = Settings(
+        scoring.low_fit_threshold if args.min_score is None else args.min_score,
+        scoring.tie_margin if args.ambiguity_margin is None else args.ambiguity_margin,
+        args.duplicate_threshold,
+        scoring,
+    )
     assistant = get_assistant(args.llm)
     print(f"Matching {len(paths)} PDF(s) against {len(layouts)} layout(s)...", file=sys.stderr)
     records = scan(paths, layouts, settings, _progress("matched"))
@@ -328,6 +336,11 @@ def build_parser() -> argparse.ArgumentParser:
         "to that service."
     )
 
+    config_help = (
+        "scoring settings JSON (weights, position scale, width tolerance, thresholds); "
+        "see src/icsel/data/scoring.json for the defaults"
+    )
+
     m = sub.add_parser("match", help="rank layouts for letters and render sample PDFs")
     m.add_argument(
         "letters",
@@ -342,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--no-zones", action="store_true", help="do not draw zone outlines in the sample PDF"
     )
+    m.add_argument("--config", type=Path, metavar="FILE", help=config_help)
     m.add_argument("--llm", metavar="BACKEND", help=llm_help)
     m.set_defaults(func=cmd_match)
 
@@ -377,19 +391,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("out") / "portfolio",
         help="output folder for portfolio.csv and portfolio.md (default: out/portfolio)",
     )
+    po.add_argument("--config", type=Path, metavar="FILE", help=config_help)
     po.add_argument("-r", "--recursive", action="store_true", help="also search subfolders")
     po.add_argument(
         "--min-score",
         type=float,
-        default=LOW_FIT_THRESHOLD,
-        help=f"best score below this is a weak fit (default: {LOW_FIT_THRESHOLD})",
+        default=None,
+        help=f"best score below this is a weak fit (default: {LOW_FIT_THRESHOLD}, or --config)",
     )
     po.add_argument(
         "--ambiguity-margin",
         type=float,
-        default=TIE_MARGIN,
+        default=None,
         help="fitting layouts within this score of the best are a near-tie "
-        f"(default: {TIE_MARGIN})",
+        f"(default: {TIE_MARGIN}, or --config)",
     )
     po.add_argument(
         "--duplicate-threshold",
@@ -454,6 +469,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except (ExtractionError, ProfileError, InputError, LLMError) as exc:
+    except (ExtractionError, ProfileError, ConfigError, InputError, LLMError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

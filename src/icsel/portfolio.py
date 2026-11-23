@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import ScoringConfig
 from .extract import ExtractionError, LetterStructure, NoTextError, extract
 from .llm import Assistant, LLMError, apply_suggestions, fit_facts
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
@@ -123,6 +124,7 @@ class Settings:
     min_score: float = LOW_FIT_THRESHOLD
     margin: float = TIE_MARGIN
     duplicate_threshold: float = DUPLICATE_THRESHOLD
+    scoring: ScoringConfig | None = None  # None = bundled defaults
 
 
 # ---------------------------------------------------------------- scanning
@@ -163,7 +165,7 @@ def assess(
 
     Returns the tie-break outcome (its ``results`` start with the chosen layout).
     """
-    tb = resolve_ties(letter, layouts, rank(letter, layouts), settings.margin)
+    tb = resolve_ties(letter, layouts, rank(letter, layouts, settings.scoring), settings.margin)
     best = tb.results[0]
     record.pages = letter.page_count
     record.unknown_blocks = sum(1 for b in letter.blocks if b.role == "unknown")
@@ -354,7 +356,9 @@ def run_ai(
             tb = assess(record, letter, layouts, settings) if changes else None
             if id(record) in explain_ids and (record.ambiguous or record.fit != FIT_GOOD):
                 if tb is None:
-                    tb = resolve_ties(letter, layouts, rank(letter, layouts), settings.margin)
+                    tb = resolve_ties(
+                        letter, layouts, rank(letter, layouts, settings.scoring), settings.margin
+                    )
                 record.ai_explanation = assistant.explain_fit(
                     fit_facts(letter, tb.results, changes)
                 )
