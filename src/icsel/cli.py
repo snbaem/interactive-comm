@@ -17,8 +17,11 @@ from typing import Any
 
 from . import __version__
 from .config import ConfigError, load_config
+from .dimensions import UNITS, diff_layouts, measure
+from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
+from .layoutview import pdf_to_png, render_comparison, render_layout_view
 from .llm import Assistant, LLMError, available_backends, get_assistant
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
 from .pipeline import analyze
@@ -36,7 +39,7 @@ from .portfolio import (
 )
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
 from .render import render_sample
-from .report import APPROX_NOTE, build_result
+from .report import APPROX_NOTE, build_result, dimensions_doc
 from .synthetic import generate, generate_portfolio
 
 EXIT_OK = 0
@@ -146,10 +149,27 @@ def cmd_match(args: argparse.Namespace) -> int:
             out_dir / f"{stems[pdf]}.sample.pdf",
             show_zones=not args.no_zones,
         )
-        result = build_result(letter, results, sample, analysis.llm)
+        best_layout = by_id[best.layout_id]
+        result = build_result(
+            letter,
+            results,
+            sample,
+            analysis.llm,
+            explanation=explain_ranking(letter, layouts, results, scoring, args.units),
+            dimensions=dimensions_doc(letter, best_layout),
+        )
+        if args.dimensions:
+            view = render_layout_view(
+                best_layout,
+                out_dir / f"{stems[pdf]}.dimensions.pdf",
+                args.units,
+                letter=letter,
+            )
+            pdf_to_png(view, view.with_suffix(".png"))
         json_path = out_dir / f"{stems[pdf]}.result.json"
         json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         _print_ranking(pdf.name, results)
+        print(f"  {result['explanation']}")
         if assistant.enabled:
             _print_ai_result(analysis.llm)
         print(f"  Wrote {json_path} and {sample.name}")
@@ -157,6 +177,56 @@ def cmd_match(args: argparse.Namespace) -> int:
     if failed:
         print(f"{failed} of {len(letters)} file(s) could not be read.", file=sys.stderr)
         return EXIT_SOME_FAILED
+    return EXIT_OK
+
+
+def _resolve_layout(layouts: list[LayoutProfile], ref: str) -> LayoutProfile:
+    """Find a layout by id, or load it from a profile JSON path."""
+    for lay in layouts:
+        if lay.id == ref:
+            return lay
+    path = Path(ref)
+    if path.suffix == ".json" and path.is_file():
+        return load_profiles(path)[0]
+    known = ", ".join(lay.id for lay in layouts)
+    raise ProfileError(f"no layout {ref!r}; known layouts: {known} (or give a profile .json path)")
+
+
+def cmd_show_layout(args: argparse.Namespace) -> int:
+    """Draw a layout with its measurements (PDF and/or PNG)."""
+    layouts = load_profiles(args.layouts)
+    layout = _resolve_layout(layouts, args.layout)
+    other = _resolve_layout(layouts, args.compare) if args.compare else None
+    letter = extract(args.letter) if args.letter else None
+    if args.diff and other is None and letter is None:
+        raise ProfileError("--diff needs --compare LAYOUT or --letter PDF to compare against")
+    out_dir: Path = args.out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if other is not None and not args.diff:
+        stem = f"compare-{layout.id}-vs-{other.id}"
+        pdf = render_comparison(layout, other, out_dir / f"{stem}.pdf", args.units)
+    else:
+        stem = f"layout-{layout.id}" + (f"-diff-{other.id}" if other else "")
+        pdf = render_layout_view(
+            layout, out_dir / f"{stem}.pdf", args.units, letter=letter, reference=other
+        )
+    written = [pdf]
+    if args.format in ("png", "both"):
+        written.append(pdf_to_png(pdf, pdf.with_suffix(".png")))
+    if args.format == "png":
+        pdf.unlink()
+        written = written[1:]
+    for p in written:
+        print(f"Wrote {p}")
+    if args.json:
+        doc = {"layout": measure(layout).to_dict()}
+        if other is not None:
+            doc["differences_vs_compare"] = [d.to_dict() for d in diff_layouts(layout, other)]
+        if letter is not None:
+            doc["letter_vs_layout"] = dimensions_doc(letter, layout)["letter_vs_layout"]
+        jp = out_dir / f"{stem}.json"
+        jp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote {jp}")
     return EXIT_OK
 
 
@@ -355,9 +425,44 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument(
         "--no-zones", action="store_true", help="do not draw zone outlines in the sample PDF"
     )
+    m.add_argument(
+        "--dimensions",
+        action="store_true",
+        help="also write <name>.dimensions.pdf/.png: the best layout with measurements and the "
+        "letter's blocks overlaid",
+    )
+    m.add_argument(
+        "--units", choices=UNITS, default="in", help="units for measurements (default: in)"
+    )
     m.add_argument("--config", type=Path, metavar="FILE", help=config_help)
     m.add_argument("--llm", metavar="BACKEND", help=llm_help)
     m.set_defaults(func=cmd_match)
+
+    sl = sub.add_parser(
+        "show-layout",
+        help="draw a layout with distances, margins, gaps and sizes (PDF/PNG)",
+    )
+    sl.add_argument("layout", metavar="LAYOUT", help="layout id, or path to a profile .json")
+    sl.add_argument("--layouts", action="append", type=Path, metavar="PATH", help=layouts_help)
+    sl.add_argument("--units", choices=UNITS, default="in", help="in, cm or pt (default: in)")
+    sl.add_argument("--out", type=Path, default=Path("out") / "layouts", help="output folder")
+    sl.add_argument(
+        "--format", choices=("pdf", "png", "both"), default="both", help="default: both"
+    )
+    sl.add_argument(
+        "--compare",
+        metavar="LAYOUT",
+        help="a second layout: side by side, or with --diff overlaid on the first",
+    )
+    sl.add_argument(
+        "--diff",
+        action="store_true",
+        help="overlay the --compare layout (or --letter) and list differences such as "
+        '"subject 0.3" lower than layout"',
+    )
+    sl.add_argument("--letter", type=Path, metavar="PDF", help="overlay a letter's blocks")
+    sl.add_argument("--json", action="store_true", help="also write the measurements as JSON")
+    sl.set_defaults(func=cmd_show_layout)
 
     pr = sub.add_parser("profile", help="derive draft layout profile(s) from PDF(s)")
     pr.add_argument(
