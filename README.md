@@ -132,14 +132,78 @@ See [`src/icsel/prompts/`](src/icsel/prompts/README.md) for the prompt templates
 call `icsel.llm.register_backend("name", factory)`. Prompts, data minimization and
 guard rails are shared. Tests use a fake backend and never touch the network.
 
+## Portfolio mode
+
+`icsel portfolio` matches a whole folder of letters and answers "how do our letters
+spread across our layouts?". It is deterministic by default and never calls a model
+unless you ask it to.
+
+**Windows (PowerShell)**
+
+```powershell
+icsel samples --portfolio                     # 40 synthetic files, with deliberate problems
+icsel portfolio samples\portfolio
+icsel portfolio D:\letters -r --out out\portfolio
+```
+
+**macOS / Linux (bash)**
+
+```bash
+icsel samples --portfolio
+icsel portfolio samples/portfolio
+icsel portfolio ~/letters -r --out out/portfolio
+```
+
+It writes `portfolio.csv` (one row per PDF, for sorting and filtering) and `portfolio.md`
+(the report). The report has:
+
+- **Letters per layout**: how many letters each layout holds, plus a "no layout fits" row.
+- **No layout fits**: letters that break a hard check on every layout, with the closest
+  layout and why. These are candidates for a new layout or a change to the letter.
+- **Weak fit**: letters that fit but score below `--min-score` (default 0.8).
+- **Ambiguous**: letters where two or more fitting layouts score within
+  `--ambiguity-margin` (default 0.05) of the best one.
+- **Near-duplicate letters**, grouped: candidates for shared content.
+- **Unreadable or no text**: corrupt files and scans are listed, and the run goes on.
+
+**Near-ties.** When fitting layouts are within the margin, the score's last decimal
+should not decide. The tightest fit wins: fewest roles without a zone, then fewest unused
+lines in the address, subject and date boxes, then the higher score, then the layout id.
+The flag stays on, so you still see that either layout would work. The tie-break only
+applies in portfolio mode; `icsel match` still ranks by score.
+
+**Duplicates.** Similarity is the Jaccard overlap of the sets of 5-word shingles of the
+letters' body paragraphs, after lower-casing and replacing every run of digits with `#`,
+so account numbers and amounts do not hide a copy. Pairs at or above
+`--duplicate-threshold` (default 0.8) are linked into groups. Comparisons are exact and
+pairwise, which is comfortable for a few thousand letters. Bodies shorter than 12 words
+are skipped.
+
+**Memory and size.** Each PDF is read and reduced to one small record, so a folder of
+hundreds of PDFs does not need to fit in memory. Every score comes from the rule-based
+matcher unless you turn the AI step on.
+
+**AI step.** Add `--llm BACKEND` (see [Optional AI step](#optional-ai-step-off-by-default)).
+Portfolio mode only asks the model about letters that need it: letters with blocks the
+rules could not label, and letters that are ambiguous, weak or fit no layout. A letter
+that fits one layout cleanly makes no call. icsel prints the estimate first, for example
+`up to 10 model call(s) for 40 letter(s)`, and asks before sending anything. Pass `--yes`
+to skip the question, which is also required when the input is not a terminal. After three
+failed letters in a row the AI step stops and the report stays rule-based.
+**Only use letters you are allowed to send to your model endpoint.**
+
+Exit code 1 means some files could not be matched (corrupt or no text layer); the
+reports are still written.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--llm BACKEND`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
+| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--llm BACKEND`, `--yes`. |
 | `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`, `--llm`). |
-| `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). |
+| `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). With `--portfolio`, generate the 40-file demo folder for `icsel portfolio` instead (default `samples/portfolio`). |
 
 `PATH` can be a file, a folder or a glob pattern such as `letters/*.pdf`. icsel
 expands patterns itself, so they work the same in PowerShell, cmd.exe and bash.
@@ -177,6 +241,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access.
   with OCR.
 - Block detection is rule-based and tuned for typical business letters. The optional
   AI step fills gaps but can be wrong too; check its labels against the scores.
+- Portfolio duplicate detection compares all pairs of letters; it is meant for a few
+  thousand letters, not millions. It compares body text only, not layout.
 - The sample PDF approximates placement only. It does not reproduce IC fonts,
   fragments, data binding or pagination.
 
