@@ -36,36 +36,28 @@ never for every letter.
 - GitHub Actions workflow on Windows and Linux (lint, tests, smoke test of the console script).
 - Apache-2.0 `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.gitignore`.
 
-## Phase 2: Better model and scoring (partly done)
+## Phase 2: Better model and scoring (done)
 
-Done:
+- Overlay preview in the browser UI; tests that every synthetic letter's best layout equals
+  its planted layout (the "fits no layout" letter must fail the hard checks instead).
+- Scoring settings (weights, position scale, closeness share, width tolerance, weak-fit
+  threshold, tie margin) live in `src/icsel/data/scoring.json`; `--config FILE` on `match` and
+  `portfolio` overrides any subset. Bad values are rejected with the file and key named.
+- Layout profiles are validated on load against `layout-profile.schema.json` rules; one error
+  lists every problem with its field (`zones[1].width: must be greater than 0`). A test
+  (needs the `jsonschema` dev dependency) checks the schema and the loader agree.
+- A rule-based plain-language explanation per result (`explanation` in the result JSON and
+  printed by `match`). Phase 3's AI explanation remains an optional upgrade.
+- `icsel show-layout LAYOUT`: dimensioned view (PDF and PNG, `--units in|cm|pt`), with
+  `--compare OTHER` (side by side), `--diff` (overlay plus differences such as
+  `subject 0.3" lower than layout`) and `--letter PDF` (overlay a letter's blocks).
+  `match --dimensions` writes the view for the best layout with the letter overlaid; result
+  JSON gains a `dimensions` section and the portfolio CSV an `offsets_vs_layout` column.
+  Measurements are plain data in `dimensions.py` with unit tests.
+- Five bundled layouts and fifteen synthetic letters including the edge cases.
 
-- Overlay preview: the browser UI (`icsel serve`) draws the detected blocks and the layout
-  zones over the source letter, beside the sample.
-- Tests that every synthetic letter's best layout equals its planted layout, plus hard-check
-  failures.
-
-Still to do:
-
-- Move the scoring weights, the position scale and the hard-check rules (currently constants
-  in `match.py`) into a documented config file with defaults.
-- A JSON Schema for the layout profile; validate profiles on load with clear errors.
-- A deterministic, plain-language **explanation** per result (no model), built from the
-  structured score. Phase 3's AI explanation then becomes an optional upgrade.
-- A **dimensioned layout view** (`icsel show-layout <profile>`, and an option on `match`).
-  It draws the page with every zone and annotates measurements in inches (`--units in|cm|pt`,
-  default inches): distance of each zone from the top and left edges (for example
-  `2.0" from top`), zone width and height, page margins, vertical and horizontal gaps between
-  neighboring zones, and line capacity beside the address and subject boxes. Dimension lines
-  with arrowheads and non-overlapping labels; PDF and PNG output.
-  Also a side-by-side comparison of two layouts and a `--diff` mode that says where the
-  letter's blocks sit relative to the chosen layout (for example `subject 0.3" lower than
-  layout`). Expose the measurements as plain data so the arithmetic is unit tested.
-- Expand the synthetic data to five layouts and about fifteen letters with more edge cases:
-  no date, two-line vs four-line subject, a very long address, a three-page body, a letter
-  with a table-like block, and a subject on the right but lower than the template expects.
-
-The ambiguity flag and the tie-break that were planned here were built in Phase 4.
+Known rough edges of the view: with zones very close together a gap label can sit on a zone
+edge; zones too small for text get their width and height only in the legend.
 
 ## Phase 3: Optional AI step (done)
 

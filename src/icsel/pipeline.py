@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .config import ScoringConfig
 from .extract import LetterStructure
 from .llm import Assistant, LLMError, NoOpAssistant, apply_suggestions, fit_facts
 from .match import MatchResult, rank
@@ -21,7 +22,10 @@ class Analysis:
 
 
 def analyze(
-    letter: LetterStructure, layouts: list[LayoutProfile], assistant: Assistant | None = None
+    letter: LetterStructure,
+    layouts: list[LayoutProfile],
+    assistant: Assistant | None = None,
+    config: ScoringConfig | None = None,
 ) -> Analysis:
     """Rank ``layouts`` for ``letter``; with an enabled assistant, label unknown blocks first.
 
@@ -41,7 +45,7 @@ def analyze(
             info["role_changes"] = [c.to_dict() for c in changes]
         except LLMError as exc:
             errors.append(f"labeling unknown blocks failed: {exc}")
-    results = rank(letter, layouts)
+    results = rank(letter, layouts, config)
     if assistant.enabled:
         try:
             info["explanation"] = assistant.explain_fit(fit_facts(letter, results, changes))
