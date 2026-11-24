@@ -139,6 +139,17 @@ def test_eval_purpose_scores(letters_dir: Path, layouts: list[LayoutProfile]) ->
     assert wrong["verdicts"][0]["beats_rules"] is False
 
 
+def test_a_constant_answer_does_not_count_as_beating_the_rules(
+    letters_dir: Path, layouts: list[LayoutProfile]
+) -> None:
+    pairs, _ = collect_truth(sorted(letters_dir.glob("*.pdf")))
+    doc = evaluate(pairs, layouts, _assistant(PurposeBackend('{"purpose": "statement"}')))
+    rules, run = (r["metrics"]["purpose_accuracy"] for r in doc["runs"])
+    assert run > rules  # better than always saying "other" ...
+    assert doc["verdicts"][0]["beats_rules"] is False  # ... but not better than a constant
+    assert "most common purpose" in doc["verdicts"][0]["text"]
+
+
 # ------------------------------------------------------------------ CLI
 def test_portfolio_column_and_table(letters_dir: Path, tmp_path: Path) -> None:
     backend = PurposeBackend('{"purpose": "statement"}')

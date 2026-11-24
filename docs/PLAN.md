@@ -92,7 +92,7 @@ until `icsel eval` has been run with a real backend.**
 Known limits of the benchmark: the letters are synthetic and short; block roles are already
 almost all right (the rules label nearly every block), so `classify` has little room to
 improve them; the field truth follows simple patterns; the rules-only purpose baseline is
-always `other`, which is easy to beat.
+always `other`, so the `purpose` task must also beat the best constant answer.
 
 **Design note: step 5, rendered-sample check (not built).** The condition was that the
 benchmark shows problems the text checks miss. No benchmark run with a real model exists, so

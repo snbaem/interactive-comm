@@ -12,7 +12,8 @@ rules plus one task at a time, so each task has to earn its place:
   date block and each address line. Names are scored separately (``name_accuracy``,
   among correctly found fields).
 * **purpose accuracy**: the rules have no purpose tagger, so their baseline is always
-  ``other``.
+  ``other``. That is easy to beat, so the task must also beat the best constant answer
+  (the most common true purpose) before it counts as an improvement.
 * **layout agreement**: the chosen layout (portfolio tie-break included) is the one the
   letter was built from; for a fits-no-layout letter, that no layout fits.
 
@@ -85,6 +86,8 @@ class Tally:
     names_right: int = 0
     purposes: int = 0
     purposes_right: int = 0
+    #: Letters a constant answer would get right (the most common true purpose).
+    purposes_constant: int = 0
     layouts: int = 0
     layouts_right: int = 0
 
@@ -234,6 +237,8 @@ def run_eval(
     ai: Any = assistant if task is not None else None
     before = ai.counters() if ai else None
     in_a_row = 0
+    common = Counter(t["purpose"] for _, t in letters if "purpose" in t).most_common(1)
+    out.tally.purposes_constant = common[0][1] if common else 0
     for i, (path, truth) in enumerate(letters, start=1):
         letter = extract(path)
         found, purpose = rule_fields(letter), NO_PURPOSE
@@ -283,6 +288,12 @@ def verdict(task: str, rules: Tally, with_task: Tally) -> tuple[bool | None, str
     if a is None or b is None:
         return None, f"`{task}`: {metric} cannot be measured on these letters."
     label = metric.replace("_", " ")
+    constant = ratio(rules.purposes_constant, rules.purposes) if task == "purpose" else None
+    if constant is not None and a < b <= constant:
+        return False, (
+            f"`{task}` DOES NOT beat the rules: {label} {a:.3f} -> {b:.3f}, but always giving "
+            f"the most common purpose scores {constant:.3f}."
+        )
     if b > a:
         text = f"`{task}` beats the rules: {label} {a:.3f} -> {b:.3f}."
     else:
@@ -375,7 +386,8 @@ def eval_markdown(doc: dict[str, Any]) -> str:
     out += [
         "",
         "Field baseline: the date and address lines the rules already find. Purpose baseline: "
-        f"always `{NO_PURPOSE}`. Fields are compared by exact text.",
+        f"always `{NO_PURPOSE}`; the task must also beat the best constant answer. "
+        "Fields are compared by exact text.",
     ]
     return "\n".join(out) + "\n"
 
