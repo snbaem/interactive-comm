@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +20,25 @@ class Analysis:
     letter: LetterStructure
     results: list[MatchResult]
     llm: dict[str, Any] = field(default_factory=dict)
+
+
+def _with_drops(
+    assistant: Any, task: str, run: Callable[[Any], Any], errors: list[str]
+) -> dict[str, Any]:
+    """Run one task; return its result and how many model items validation dropped."""
+    before = dict(assistant.drops)
+    result: Any = None
+    try:
+        result = run(assistant)
+    except LLMError as exc:
+        errors.append(f"{task} failed: {exc}")
+    prefix = f"{task}: "
+    dropped = {
+        k.removeprefix(prefix): n - before.get(k, 0)
+        for k, n in assistant.drops.items()
+        if k.startswith(prefix) and n > before.get(k, 0)
+    }
+    return {"result": result, "dropped": dropped}
 
 
 def analyze(
@@ -46,6 +66,11 @@ def analyze(
         except LLMError as exc:
             errors.append(f"labeling unknown blocks failed: {exc}")
     results = rank(letter, layouts, config)
+    tasks = getattr(assistant, "tasks", ())
+    if "fields" in tasks:
+        info["fields"] = _with_drops(
+            assistant, "fields", lambda ai: [f.to_dict() for f in ai.detect_fields(letter)], errors
+        )
     if assistant.enabled:
         try:
             info["explanation"] = assistant.explain_fit(fit_facts(letter, results, changes))

@@ -10,6 +10,9 @@ What is sent to the model:
 * **Explaining the fit:** scores, offsets, hard-check failures and role counts
   (:func:`fit_facts`). No letter text at all.
 
+* **Detecting fields** (``fields``, off by default, needs its own opt-in): the text of
+  every block except letterhead and footer. See :mod:`icsel.llm.fields`.
+
 What the model may change (:func:`apply_suggestions`): only blocks the rules left
 ``unknown``, only to a known role, only above a confidence threshold, and never a
 second date, address or subject on page 1. Rule-based roles are never overridden.
@@ -19,23 +22,28 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, TypeVar
 
 from ..extract import LetterStructure
 from ..match import LOW_FIT_THRESHOLD, MatchResult
 from ..profile import ROLES
 from .base import CompletionBackend, LLMCallLimit, LLMError, RoleChange, Suggestion
-from .prompts import render_prompt
+from .cache import ReplyCache
+from .fields import FIELDS_SCHEMA, FieldSpan, letter_blocks, parse_fields
+from .prompts import render_prompt, template_version
 
 #: Most characters of one unknown block's text that are sent.
 MAX_BLOCK_TEXT = 600
 #: Roles a letter has at most once (on page 1).
 SINGLE_ROLES = ("date", "address", "subject")
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
-TASKS = ("classify", "explain")
+TASKS = ("classify", "explain", "fields")
 #: Jobs that run when AI is on and no task list is given.
 DEFAULT_TASKS = ("classify", "explain")
+
+#: Jobs that send letter body text. Each also needs its own opt-in switch.
+TEXT_TASKS = ("fields",)
 
 T = TypeVar("T")
 
@@ -197,14 +205,23 @@ class LLMAssistant:
         min_confidence: float = 0.5,
         tasks: tuple[str, ...] = DEFAULT_TASKS,
         max_calls: int | None = None,
+        send_text: Collection[str] = (),
+        cache: ReplyCache | None = None,
     ) -> None:
         unknown = set(tasks) - set(TASKS)
         if unknown:
             raise LLMError(f"unknown AI task(s) {sorted(unknown)}; choose from {list(TASKS)}")
+        for task in TEXT_TASKS:
+            if task in tasks and task not in send_text:
+                raise LLMError(
+                    f"AI task '{task}' sends letter text. To allow that, add --{task}-send-text "
+                    f"or set ICSEL_LLM_{task.upper()}_SEND_TEXT=1"
+                )
         self.backend = backend
         self.min_confidence = min_confidence
         self.tasks = tuple(tasks)
         self.max_calls = max_calls
+        self.cache = cache
         #: Model calls made, replies taken from the cache, and model items that were
         #: dropped by validation (``"task: reason"`` -> count).
         self.calls = 0
@@ -252,12 +269,34 @@ class LLMAssistant:
     ) -> T:
         """Render a prompt, call the model (within the cap) and validate the reply."""
         system, prompt = render_prompt(template, **values)
+        key = ""
+        if self.cache is not None:
+            key = self.cache.key(
+                task,
+                template_version(template),
+                self.backend.name,
+                self.backend.model,
+                json.dumps([system, prompt, schema], sort_keys=True),
+            )
+            stored = self.cache.get(key)
+            if stored is not None:
+                drops = self.drops.copy()
+                try:
+                    result = parse(stored)
+                except LLMError:
+                    self.drops = drops  # damaged entry: ask again
+                else:
+                    self.cache_hits += 1
+                    return result
         if self.max_calls is not None and self.calls >= self.max_calls:
             raise LLMCallLimit(f"reached the cap of {self.max_calls} model call(s)")
         self.calls += 1
         raw = self.backend.complete(system, prompt, schema)
         self._count_usage()
-        return parse(raw)
+        result = parse(raw)  # raises for a bad reply, which is then never cached
+        if self.cache is not None and result is not None:
+            self.cache.put(key, raw)
+        return result
 
     def classify_unknown(self, letter: LetterStructure) -> list[Suggestion]:
         """Ask the model about ``unknown`` blocks. No call is made if there are none."""
@@ -273,6 +312,23 @@ class LLMAssistant:
             CLASSIFY_SCHEMA,
             roles=", ".join(r for r in ROLES if r != "unknown"),
             payload=json.dumps(payload, indent=2),
+        )
+
+    def detect_fields(self, letter: LetterStructure) -> list[FieldSpan]:
+        """Ask the model which text is fixed and which is variable. Sends letter text."""
+        if "fields" not in self.tasks:
+            return []
+        blocks = letter_blocks(letter)
+        if not blocks:
+            return []
+        return self._ask(
+            "fields",
+            "detect_fields",
+            lambda raw: parse_fields(
+                raw, blocks, self.min_confidence, lambda why: self._drop("fields", why)
+            ),
+            FIELDS_SCHEMA,
+            blocks=json.dumps(blocks, indent=1, ensure_ascii=False),
         )
 
     def explain_fit(self, facts: dict[str, Any]) -> str | None:

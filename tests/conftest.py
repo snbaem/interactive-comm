@@ -38,6 +38,12 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "create_connection", guard_create)
 
 
+@pytest.fixture(autouse=True)
+def private_ai_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch) -> None:
+    """Give every test its own empty AI cache."""
+    monkeypatch.setenv("ICSEL_AI_CACHE_DIR", str(tmp_path_factory.mktemp("ai-cache")))
+
+
 @pytest.fixture(scope="session")
 def layouts_dir() -> Path:
     return default_layouts_dir()

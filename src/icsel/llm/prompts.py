@@ -8,6 +8,7 @@ user prompt. ``$name`` placeholders are filled with :class:`string.Template`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from string import Template
@@ -24,6 +25,15 @@ def prompts_dir() -> Path:
     if override:
         return Path(override)
     return Path(__file__).resolve().parent.parent / "prompts"
+
+
+def template_version(name: str) -> str:
+    """Short hash of a template's text; changes whenever the wording does."""
+    try:
+        text = (prompts_dir() / f"{name}.md").read_bytes()
+    except OSError as exc:
+        raise LLMError(f"prompt template not found: {name}.md") from exc
+    return hashlib.sha256(text).hexdigest()[:12]
 
 
 def render_prompt(name: str, **values: str) -> tuple[str, str]:

@@ -4,17 +4,19 @@
 by default. Other settings:
 
 ``ICSEL_LLM_MIN_CONFIDENCE``  ignore suggestions below this (default 0.5)
-``ICSEL_LLM_TASKS``           comma list of ``classify``, ``explain`` (default both)
+``ICSEL_LLM_TASKS``           comma list of tasks (default ``classify,explain``)
+``ICSEL_LLM_<TASK>_SEND_TEXT``  ``1`` lets a task that sends letter text do so (``FIELDS``)
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 
 from .anthropic_backend import AnthropicBackend
-from .assistant import DEFAULT_TASKS, LLMAssistant
+from .assistant import DEFAULT_TASKS, TEXT_TASKS, LLMAssistant
 from .base import Assistant, CompletionBackend, LLMError, NoOpAssistant
+from .cache import ReplyCache
 
 ENV_VAR = "ICSEL_LLM"
 OFF = ("", "none", "off", "0", "false", "no")
@@ -41,6 +43,8 @@ def get_assistant(
     env: Mapping[str, str] | None = None,
     tasks: str | None = None,
     max_calls: int | None = None,
+    send_text: Collection[str] = (),
+    cache: ReplyCache | None = None,
 ) -> Assistant:
     """Return the configured assistant (the no-op one unless explicitly enabled).
 
@@ -49,6 +53,8 @@ def get_assistant(
         env: Settings; defaults to the process environment.
         tasks: Comma list overriding ``ICSEL_LLM_TASKS``.
         max_calls: Hard cap on model calls for this run.
+        send_text: Tasks allowed to send letter text, besides those allowed in ``env``.
+        cache: Where validated replies are kept; ``None`` turns caching off.
 
     Raises:
         LLMError: For an unknown backend name or invalid settings.
@@ -68,6 +74,17 @@ def get_assistant(
         raise LLMError(f"invalid ICSEL_LLM_MIN_CONFIDENCE: {exc}") from exc
     listed = env.get("ICSEL_LLM_TASKS", ",".join(DEFAULT_TASKS)) if tasks is None else tasks
     chosen = tuple(t.strip() for t in listed.split(",") if t.strip())
+    allowed = {
+        t
+        for t in TEXT_TASKS
+        if t in send_text
+        or env.get(f"ICSEL_LLM_{t.upper()}_SEND_TEXT", "").strip().lower() not in OFF
+    }
     return LLMAssistant(
-        factory(env), min_confidence=min_confidence, tasks=chosen, max_calls=max_calls
+        factory(env),
+        min_confidence=min_confidence,
+        tasks=chosen,
+        max_calls=max_calls,
+        send_text=allowed,
+        cache=cache,
     )

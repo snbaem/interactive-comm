@@ -23,8 +23,15 @@ from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
 from .layoutview import pdf_to_png, render_comparison, render_layout_view
-from .llm import Assistant, LLMError, available_backends, get_assistant
-from .llm.assistant import DEFAULT_TASKS, TASKS
+from .llm import (
+    Assistant,
+    LLMError,
+    ReplyCache,
+    available_backends,
+    default_cache_dir,
+    get_assistant,
+)
+from .llm.assistant import DEFAULT_TASKS, TASKS, TEXT_TASKS
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
 from .pipeline import analyze
 from .portfolio import (
@@ -37,6 +44,7 @@ from .portfolio import (
     run_ai,
     scan,
     write_csv,
+    write_fields_csv,
     write_markdown,
 )
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
@@ -47,6 +55,13 @@ from .synthetic import generate, generate_portfolio
 EXIT_OK = 0
 EXIT_SOME_FAILED = 1
 EXIT_USAGE = 2
+
+#: What each AI task sends, for the notice printed before anything is sent.
+SENT = {
+    "classify": "the text of blocks the rules could not label, plus layout facts",
+    "explain": "scores and layout facts",
+    "fields": "LETTER TEXT (everything except letterhead and footer, names and addresses included)",
+}
 
 
 def structure_to_profile(letter: LetterStructure, profile_id: str, name: str = "") -> LayoutProfile:
@@ -102,11 +117,10 @@ def _print_ranking(name: str, results: list[MatchResult]) -> None:
 
 def _print_ai_notice(assistant: Assistant) -> None:
     info = assistant.describe()
-    print(
-        f"AI step ON: {info['backend']} / {info['model']} (tasks: {', '.join(info['tasks'])}).\n"
-        "  Sent: the text of blocks the rules could not label, plus layout facts and scores.\n"
-        "  Only use letters you are allowed to send to this service."
-    )
+    tasks = info["tasks"]
+    print(f"AI step ON: {info['backend']} / {info['model']} (tasks: {', '.join(tasks)}).")
+    print("  Sent: " + "; ".join(SENT[t] for t in SENT if t in tasks) + ".")
+    print("  Only use letters you are allowed to send to this service.")
 
 
 def _print_ai_result(llm: dict[str, Any]) -> None:
@@ -118,6 +132,15 @@ def _print_ai_result(llm: dict[str, Any]) -> None:
     if llm.get("explanation"):
         lines = textwrap.wrap(llm["explanation"], width=88)
         print("  Why (AI): " + "\n            ".join(lines))
+    if llm.get("fields", {}).get("result"):
+        found = [f for f in llm["fields"]["result"] if f["kind"] == "variable"]
+        names = ", ".join(f["name"] for f in found)
+        print(f"  AI: {len(found)} variable field(s): {names}")
+    for section in ("fields",):
+        dropped = llm.get(section, {}).get("dropped")
+        if dropped:
+            why = ", ".join(f"{k} {n}" for k, n in dropped.items())
+            print(f"  AI: dropped {section} output: {why}")
     for err in llm.get("errors", []):
         print(f"  AI step warning: {err}", file=sys.stderr)
 
@@ -295,7 +318,13 @@ def _progress(label: str) -> Any:
 
 def _assistant_from_args(args: argparse.Namespace) -> Assistant:
     """The assistant for ``--llm`` and the other AI options of a command."""
-    return get_assistant(args.llm, tasks=args.ai_tasks, max_calls=args.max_calls)
+    return get_assistant(
+        args.llm,
+        tasks=args.ai_tasks,
+        max_calls=args.max_calls,
+        send_text=[t for t in TEXT_TASKS if getattr(args, f"{t}_send_text")],
+        cache=None if args.no_ai_cache else ReplyCache(default_cache_dir()),
+    )
 
 
 def _confirm(question: str) -> bool:
@@ -304,6 +333,15 @@ def _confirm(question: str) -> bool:
         print("Not an interactive terminal, so the AI step needs --yes.", file=sys.stderr)
         return False
     return input(question).strip().lower() in ("y", "yes")
+
+
+def _ai_details(assistant: Any) -> list[str]:
+    """Calls made and model output dropped by validation, for the report."""
+    count = assistant.counters()
+    out = [f"Model calls: {count['calls']}; replies taken from the cache: {count['cache_hits']}."]
+    dropped = ", ".join(f"{why} {n}" for why, n in sorted(count["drops"].items()))
+    out.append(f"Model output dropped by validation: {dropped or 'none'}.")
+    return out
 
 
 def _portfolio_ai_step(
@@ -319,8 +357,13 @@ def _portfolio_ai_step(
     print(
         f"AI step plan: up to {plan.calls} model call(s) for {len(records)} letter(s): "
         f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
-        "ambiguous, weak or no-fit letters. Letters that fit one layout cleanly make no call."
+        "ambiguous, weak or no-fit letters"
+        + (f", {len(plan.fields)} to detect fields" if plan.fields else "")
+        + "."
+        + ("" if plan.fields else " Letters that fit one layout cleanly make no call.")
     )
+    if args.max_calls is not None and plan.calls > args.max_calls:
+        print(f"  Capped at {args.max_calls} call(s) by --max-calls.")
     if plan.calls == 0:
         line = "- Nothing to ask: no unknown blocks and no ambiguous, weak or no-fit letters."
         return {"line": line}
@@ -329,9 +372,8 @@ def _portfolio_ai_step(
         return {"line": "- Skipped (not confirmed); the report is rule-based only."}
     stopped = run_ai(plan, layouts, assistant, settings, _progress("AI"))
     info = assistant.describe()
-    touched = len({id(r) for r in [*plan.classify, *plan.explain]})
-    line = f"- Ran {info['backend']} / {info['model']} on {touched} letter(s)."
-    return {"line": line, "stopped": stopped}
+    line = f"- Ran {info['backend']} / {info['model']} on {len(plan.letters())} letter(s)."
+    return {"line": line, "stopped": stopped, "details": _ai_details(assistant)}
 
 
 def cmd_portfolio(args: argparse.Namespace) -> int:
@@ -356,6 +398,8 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
 
     out: Path = args.out
     csv_path = write_csv(records, out / "portfolio.csv")
+    if any(r.ai_fields for r in records):
+        print(f"Wrote {write_fields_csv(records, out / 'fields.csv')}")
     md_path = write_markdown(records, groups, layouts, settings, out / "portfolio.md", ai_summary)
     matched = sum(1 for r in records if r.status == STATUS_OK)
     unreadable = len(records) - matched
@@ -409,6 +453,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     layouts = load_profiles(args.layouts) if args.layouts else None
     assistant = get_assistant(args.llm)
+    extra = set(getattr(assistant, "tasks", ())) - set(DEFAULT_TASKS)
+    if extra:
+        # The page tells users what is sent; it only knows about the default tasks.
+        raise LLMError(f"icsel serve does not support AI task(s) {', '.join(sorted(extra))}")
     if assistant.enabled:
         _print_ai_notice(assistant)
     try:
@@ -449,6 +497,17 @@ def _add_ai_options(parser: argparse.ArgumentParser, llm_help: str) -> None:
     )
     parser.add_argument(
         "--max-calls", type=_call_cap, metavar="N", help="hard cap on model calls for this run"
+    )
+    for task in TEXT_TASKS:
+        parser.add_argument(
+            f"--{task}-send-text",
+            action="store_true",
+            help=f"allow the '{task}' task to send letter text (off by default)",
+        )
+    parser.add_argument(
+        "--no-ai-cache",
+        action="store_true",
+        help="do not read or write cached model replies (default cache: out/.ai-cache)",
     )
 
 
