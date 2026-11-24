@@ -24,7 +24,7 @@ from icsel.evaluate import (
 from icsel.extract import extract
 from icsel.llm import LLMAssistant, LLMError, register_backend
 from icsel.profile import LayoutProfile
-from icsel.synthetic import LETTERS, generate_portfolio
+from icsel.synthetic import LETTERS, STATEMENTS, generate_portfolio
 
 
 @pytest.fixture(scope="module")
@@ -77,7 +77,7 @@ class BrokenBackend(LabelBackend):
 # ------------------------------------------------------------------ ground truth
 def test_truth_describes_every_letter(letters_dir: Path) -> None:
     truth = load_truth(letters_dir / "truth.json")
-    assert set(truth) == {f"{s.id}.pdf" for s in LETTERS}
+    assert set(truth) == {f"{s.id}.pdf" for s in [*LETTERS, *STATEMENTS]}
     assert truth["L14-no-layout-fits.pdf"]["layout"] is None
     assert truth["L01-classic.pdf"]["layout"] == "classic-left"
     fields = {f["name"]: f["text"] for f in truth["L02-classic-jitter.pdf"]["fields"]}
@@ -93,6 +93,8 @@ def test_truth_fields_are_verbatim_and_uniquely_named(
         for name, entry in load_truth(folder / "truth.json").items():
             letter = extract(folder / name)
             text = "\n".join(b.text for b in letter.blocks)
+            if "fields" not in entry:
+                continue  # statements
             names = [f["name"] for f in entry["fields"]]
             assert len(names) == len(set(names)), name
             if name.startswith("L14"):
@@ -102,7 +104,7 @@ def test_truth_fields_are_verbatim_and_uniquely_named(
 
 def test_almost_every_block_can_be_scored(letters_dir: Path, layouts: list[LayoutProfile]) -> None:
     pairs, skipped = collect_truth(sorted(letters_dir.glob("*.pdf")))
-    assert len(pairs) == len(LETTERS) and skipped == 0
+    assert len(pairs) == len(LETTERS) + len(STATEMENTS) and skipped == 0
     tally = run_eval(pairs, layouts).tally
     assert tally.blocks_unscored == 0 and tally.blocks > 100
 

@@ -44,6 +44,8 @@ from .purpose import OTHER, load_purposes, parse_purpose, purpose_payload, purpo
 MAX_BLOCK_TEXT = 600
 #: Roles a letter has at most once (on page 1).
 SINGLE_ROLES = ("date", "address", "subject")
+#: Roles the model may suggest. Statement parts are labeled by rules only.
+SUGGESTED_ROLES = tuple(r for r in ROLES if r not in ("reference", "table"))
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
 TASKS = ("classify", "explain", "fields", "propose", "purpose")
 #: Jobs that run when AI is on and no task list is given.
@@ -63,7 +65,7 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "index": {"type": "integer"},
-                    "role": {"type": "string", "enum": list(ROLES)},
+                    "role": {"type": "string", "enum": list(SUGGESTED_ROLES)},
                     "confidence": {"type": "number"},
                     "reason": {"type": "string"},
                 },
@@ -153,7 +155,7 @@ def apply_suggestions(
         b = blocks[s.index]
         if b.role != "unknown" or b.role_source != "rules":
             continue  # only blocks the rules could not label, and only once
-        if s.role not in ROLES or s.role == "unknown" or s.confidence < min_confidence:
+        if s.role not in SUGGESTED_ROLES or s.role == "unknown" or s.confidence < min_confidence:
             continue
         if s.role in SINGLE_ROLES:
             if b.page != 1 or s.role in taken:
@@ -249,6 +251,12 @@ class LLMAssistant:
             "tasks": list(self.tasks),
         }
 
+    def check(self) -> None:
+        """Verify the backend's credentials, if it can do so (raises ``LLMError``)."""
+        check = getattr(self.backend, "check", None)
+        if check is not None:
+            check()
+
     def counters(self) -> dict[str, Any]:
         """Snapshot of calls, cache hits, tokens and dropped items so far."""
         return {
@@ -320,7 +328,7 @@ class LLMAssistant:
             "classify_blocks",
             parse_suggestions,
             CLASSIFY_SCHEMA,
-            roles=", ".join(r for r in ROLES if r != "unknown"),
+            roles=", ".join(r for r in SUGGESTED_ROLES if r != "unknown"),
             payload=json.dumps(payload, indent=2),
         )
 

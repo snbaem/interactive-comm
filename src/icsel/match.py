@@ -15,6 +15,8 @@ Hard checks (any failure means the layout does not fit, whatever the score):
 
 * line capacity: a block has more lines than its zone's ``max_lines``;
 * width: a block is wider than its zone by more than :data:`WIDTH_TOLERANCE`;
+* kind: a statement only fits a layout made for statements, and a letter only one for
+  letters; layouts of the other kind are ranked last;
 * required: a zone marked ``required`` has no matching letter block.
 
 Near-ties (:func:`resolve_ties`): when several layouts fit and score within
@@ -123,6 +125,8 @@ def score_layout(
     cfg = config or DEFAULT_CONFIG
     roles: list[RoleScore] = []
     failures: list[str] = []
+    if letter.kind != layout.kind:
+        failures.append(f"this is a {letter.kind}; the layout is for {layout.kind}s")
     for role in cfg.role_weights:
         zone = layout.zone(role)
         block = letter.region(role)
@@ -155,7 +159,10 @@ def rank(
 ) -> list[MatchResult]:
     """Score every layout; fitting layouts first, then by descending score."""
     results = [score_layout(letter, lay, config) for lay in layouts]
-    return sorted(results, key=lambda r: (not r.fits, -r.score, r.layout_id))
+    other_kind = {lay.id for lay in layouts if lay.kind != letter.kind}
+    return sorted(
+        results, key=lambda r: (not r.fits, r.layout_id in other_kind, -r.score, r.layout_id)
+    )
 
 
 @dataclass

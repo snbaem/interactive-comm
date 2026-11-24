@@ -29,7 +29,12 @@ ROLES = (
     "closing",
     "footer",
     "unknown",
+    "reference",
+    "table",
 )
+
+#: Kinds of document a layout can be for.
+KINDS = ("letter", "statement")
 
 
 class ProfileError(ValueError):
@@ -69,6 +74,7 @@ class LayoutProfile:
     page_height: float
     zones: list[Zone]
     description: str = ""
+    kind: str = "letter"
     profile_version: int = PROFILE_VERSION
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -96,6 +102,7 @@ class LayoutProfile:
             "description": self.description,
             "page": {"width": self.page_width, "height": self.page_height, "units": "pt"},
             "zones": zones,
+            **({"kind": self.kind} if self.kind != "letter" else {}),
         }
         out.update(self.extra)
         return out
@@ -123,6 +130,8 @@ def validate_profile_dict(data: Any) -> list[str]:
     for key in ("name", "description"):
         if key in data and not isinstance(data[key], str):
             problems.append(f"{key}: must be a string")
+    if data.get("kind", "letter") not in KINDS:
+        problems.append(f"kind: {data['kind']!r} is not one of {', '.join(KINDS)}")
     version = data.get("profile_version", PROFILE_VERSION)
     if version != PROFILE_VERSION or isinstance(version, bool):
         problems.append(f"profile_version: must be {PROFILE_VERSION}, got {version!r}")
@@ -225,7 +234,7 @@ def profile_from_dict(data: dict[str, Any], source: str = "<dict>") -> LayoutPro
         )
         for z in data["zones"]
     ]
-    known = {"profile_version", "id", "name", "description", "page", "zones"}
+    known = {"profile_version", "id", "name", "description", "page", "zones", "kind"}
     return LayoutProfile(
         id=data["id"],
         name=str(data.get("name", data["id"])),
@@ -233,6 +242,7 @@ def profile_from_dict(data: dict[str, Any], source: str = "<dict>") -> LayoutPro
         page_width=float(page["width"]),
         page_height=float(page["height"]),
         zones=zones,
+        kind=data.get("kind", "letter"),
         profile_version=int(data.get("profile_version", PROFILE_VERSION)),
         extra={k: v for k, v in data.items() if k not in known},
     )

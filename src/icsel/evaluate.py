@@ -289,7 +289,7 @@ def verdict(task: str, rules: Tally, with_task: Tally) -> tuple[bool | None, str
         return None, f"`{task}`: {metric} cannot be measured on these letters."
     label = metric.replace("_", " ")
     constant = ratio(rules.purposes_constant, rules.purposes) if task == "purpose" else None
-    if constant is not None and a < b <= constant:
+    if constant is not None and a < b <= round(constant, 4):  # metrics are rounded too
         return False, (
             f"`{task}` DOES NOT beat the rules: {label} {a:.3f} -> {b:.3f}, but always giving "
             f"the most common purpose scores {constant:.3f}."

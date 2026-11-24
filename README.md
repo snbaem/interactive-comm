@@ -81,7 +81,7 @@ busy, it uses the next free one and prints the address. You can:
   made in scores close to 1.0.
 
 The server uses only the Python standard library. It listens on `127.0.0.1` and
-makes no outbound calls. Uploads and results go to `out/web/`. Stop it with
+makes no outbound calls unless you turn on the AI step. Uploads and results go to `out/web/`. Stop it with
 Ctrl+C. Do not expose it with `--host 0.0.0.0` on a shared network: it has no
 authentication.
 
@@ -99,6 +99,15 @@ labeled. The explanation is only requested when the rules flag a weak fit, a nea
 no fit; it is shown after the rule-based text. It only fills gaps: no second address, date or subject, and only above a
 confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
 the result JSON and with an **AI** badge in the browser UI.
+
+**In the browser UI:** install the extra (`python -m pip install -e ".[llm]"`), run
+`icsel serve --open`, and switch on **Use AI** under *AI settings*. Enter your API key and
+choose whether letter text may be sent (off by default: the AI then only explains scores).
+*Turn on* checks the key without sending letter data. The key is kept in memory until
+icsel stops; it is never written to disk or sent back to the browser. *Forget key* removes
+it sooner. The settings are locked when icsel listens on a non-loopback address.
+
+**On the command line**, or to start the UI with AI already on:
 
 ```powershell
 python -m pip install -e ".[llm]"          # example backend: Claude via the Anthropic SDK
@@ -194,7 +203,7 @@ synthetic and small; a good score on them says little about your letters.
 **Other providers:** the AI step is written against a one-method interface
 (`CompletionBackend.complete(system, prompt, json_schema)` in
 [`icsel/llm/base.py`](src/icsel/llm/base.py)). To add a provider, implement it and
-call `icsel.llm.register_backend("name", factory)`. A backend may expose `last_usage`
+call `icsel.llm.register_backend("name", factory, api_key_env="NAME_API_KEY")`. A backend may expose `last_usage`
 (token name to count) and `prices` (per million tokens) for reports. Prompts, data minimization and
 guard rails are shared. Tests use a fake backend and never touch the network.
 
@@ -297,6 +306,12 @@ reports it and moves on to the next file.
    width, and required zones.
 3. `render.py` draws the letter's text into the winning layout's zones with
    reportlab.
+
+**Statements.** A document with a bold or all-caps "... statement" title, no greeting and a
+table of four or more rows is treated as a statement. Its title becomes the subject,
+"Label: value" lines become the date and `reference` details, and table cells become
+`table`. A statement only fits layouts with `"kind": "statement"` (bundled: `statement`),
+and a letter only fits letter layouts, so neither is forced into the other's boxes.
 
 Layout profiles are JSON files, validated on load (schema: `src/icsel/data/layout-profile.schema.json`). Measurements are in points, from the top-left
 corner of the page. The bundled examples are in

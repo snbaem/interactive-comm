@@ -162,8 +162,8 @@ def test_portfolio_column_and_table(letters_dir: Path, tmp_path: Path) -> None:
         rows = list(csv.DictReader(fh))
     assert {r["purpose"] for r in rows} == {"statement"}
     report = (tmp_path / "portfolio.md").read_text(encoding="utf-8")
-    assert "## Purpose by layout (AI, 15 letter(s) tagged)" in report
-    assert re.search(r"\| statement \|.* 15 \|", report)
+    assert "## Purpose by layout (AI, 17 letter(s) tagged)" in report
+    assert re.search(r"\| statement \|.* 17 \|", report)
 
 
 def test_rules_only_portfolio_has_an_empty_purpose_column(

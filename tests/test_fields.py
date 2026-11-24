@@ -274,7 +274,7 @@ def test_portfolio_writes_fields_csv(
     argv += ["--ai-tasks", "fields", "--fields-send-text"]
     assert main([*argv, "--out", str(tmp_path / "a")]) == EXIT_OK
     assert "LETTER TEXT" in capsys.readouterr().out
-    assert len(backend.prompts) == 15
+    assert len(backend.prompts) == 17
     with (tmp_path / "a" / "fields.csv").open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
     dates = [r for r in rows if r["field"] == "letterDate"]
@@ -285,9 +285,9 @@ def test_portfolio_writes_fields_csv(
     assert "dropped by validation: none" in report
     # Same letters again: everything is in the cache.
     assert main([*argv, "--out", str(tmp_path / "b")]) == EXIT_OK
-    assert len(backend.prompts) == 15
+    assert len(backend.prompts) == 17
     assert main([*argv, "--no-ai-cache", "--max-calls", "4", "--out", str(tmp_path / "c")]) == 0
-    assert len(backend.prompts) == 19
+    assert len(backend.prompts) == 21
     assert "cap of 4" in (tmp_path / "c" / "portfolio.md").read_text(encoding="utf-8")
 
 

@@ -27,10 +27,27 @@ _FACTORIES: dict[str, BackendFactory] = {
     "anthropic": AnthropicBackend.from_env,
 }
 
+#: Environment variable each backend reads its API key from, if it uses one.
+_KEY_VARS: dict[str, str] = {"anthropic": "ANTHROPIC_API_KEY"}
 
-def register_backend(name: str, factory: BackendFactory) -> None:
-    """Make a backend selectable as ``--llm NAME`` / ``ICSEL_LLM=NAME``."""
+
+def register_backend(name: str, factory: BackendFactory, api_key_env: str | None = None) -> None:
+    """Make a backend selectable as ``--llm NAME`` / ``ICSEL_LLM=NAME``.
+
+    ``api_key_env`` names the variable ``factory`` reads its key from. A key typed into
+    the browser UI is passed to ``factory`` under that name; without it, the UI offers
+    no key field for this backend.
+    """
     _FACTORIES[name.lower()] = factory
+    if api_key_env:
+        _KEY_VARS[name.lower()] = api_key_env
+    else:
+        _KEY_VARS.pop(name.lower(), None)
+
+
+def api_key_variable(name: str) -> str | None:
+    """Environment variable holding the API key of backend ``name``, if it uses one."""
+    return _KEY_VARS.get(name.lower())
 
 
 def available_backends() -> list[str]:

@@ -4,7 +4,7 @@ Deterministic, no model:
 
 1. Take the weak and no-fit letters of a portfolio run and read where their address,
    subject and date boxes start on page 1.
-2. Cluster them. Two letters are close when they have the same page size and the same of
+2. Cluster them. Two letters are close when they have the same kind, page size and set of
    those boxes, and no box is farther apart than ``cluster_distance`` points (scoring
    settings). Letters are taken in name order; each joins the first cluster in which it is
    close to *every* member, so a cluster cannot drift.
@@ -38,7 +38,7 @@ from .profile import LayoutProfile, Zone, profile_from_dict
 #: Boxes whose position defines a cluster.
 SIGNATURE_ROLES = ("address", "subject", "date")
 #: Boxes a draft profile can have.
-DRAFT_ROLES = ("letterhead", "date", "address", "subject", "body", "footer")
+DRAFT_ROLES = ("letterhead", "date", "address", "subject", "reference", "body", "footer")
 
 
 @dataclass
@@ -60,6 +60,7 @@ class Geometry:
     page_width: float
     page_height: float
     boxes: dict[str, Box]
+    kind: str = "letter"
 
 
 @dataclass
@@ -84,12 +85,12 @@ def read_geometry(record: LetterRecord, letter: LetterStructure) -> Geometry:
         r = letter.region(role)
         if r is not None:
             boxes[role] = Box(r.x, r.y, r.width, r.height, r.line_count)
-    return Geometry(record, letter.page_width, letter.page_height, boxes)
+    return Geometry(record, letter.page_width, letter.page_height, boxes, letter.kind)
 
 
 def distance(a: Geometry, b: Geometry) -> float:
     """Largest distance between the top-left corners of any signature box, in points."""
-    if (a.page_width, a.page_height) != (b.page_width, b.page_height):
+    if (a.kind, a.page_width, a.page_height) != (b.kind, b.page_width, b.page_height):
         return math.inf
     roles = [r for r in SIGNATURE_ROLES if r in a.boxes]
     if not roles or roles != [r for r in SIGNATURE_ROLES if r in b.boxes]:
@@ -138,6 +139,7 @@ def draft_profile(members: Sequence[Geometry], profile_id: str) -> LayoutProfile
         page_h,
         zones,
         description=f"Draft from {len(members)} letter(s); review before use.",
+        kind=members[0].kind,
     )
     return profile_from_dict(profile.to_dict(), source=profile_id)
 
@@ -151,7 +153,8 @@ def nearest_layout(
         diffs = [d for d in diff_layouts(profile, layout) if d.role in SIGNATURE_ROLES]
         return sum(math.hypot(d.dx, d.dy) for d in diffs) / len(diffs) if diffs else math.inf
 
-    return min(layouts, key=lambda lay: (mean(lay), lay.id), default=None)
+    same = [lay for lay in layouts if lay.kind == profile.kind]
+    return min(same, key=lambda lay: (mean(lay), lay.id), default=None)
 
 
 def propose(

@@ -345,6 +345,82 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     return out
 
 
+@dataclass
+class StatementSpec:
+    """Recipe for one synthetic account statement."""
+
+    id: str
+    rows: int
+    row_step: float
+    note: str
+
+
+STATEMENTS = [
+    StatementSpec("S01-statement", 22, 18.0, "Account statement with a one-page table."),
+    StatementSpec("S02-statement-2page", 60, 12.0, "Statement with tight rows over two pages."),
+]
+_STATEMENT_COLUMNS = (("Date", 54), ("Description", 130), ("Units", 380), ("Amount", 450),
+                      ("Balance", 520))  # fmt: skip
+
+
+_STATEMENT_DETAILS = ["Statement date: March 3, 2026", "Account: 0000-0001",
+                      "Period: Feb 1 - Feb 28, 2026"]  # fmt: skip
+_STATEMENT_SUMMARY = [("Opening balance", "120.00"), ("Payments", "-120.00"),
+                      ("Charges", "141.95"), ("Amount due", "141.95")]  # fmt: skip
+_STATEMENT_NOTE = "Payment is due by March 25, 2026. Pay online or at any service counter."
+
+
+def _statement_row(r: int) -> list[str]:
+    return [f"Feb {r % 28 + 1:02d}", f"Water usage reading {r + 1}", str(10 + r),
+            f"{3 + r * 0.4:.2f}", f"{30 + r * 5:.2f}"]  # fmt: skip
+
+
+def render_statement(spec: StatementSpec, out: Path) -> Path:
+    """Draw one synthetic account statement: title, details, summary boxes and a table."""
+    _, page_h = LETTER
+    c = canvas.Canvas(str(out), pagesize=LETTER, invariant=1)
+    c.setTitle(f"Synthetic statement {spec.id}")
+    c.setAuthor("icsel synthetic data (fictional)")
+
+    def text(x: float, top: float, value: str, font: str = FONT, size: float = 9) -> None:
+        c.setFont(font, size)
+        c.drawString(x, _baseline(page_h, top, size), value)
+
+    def footer() -> None:
+        text(54, 760, COMPANY_FOOTER, size=7)
+
+    def header(top: float) -> None:
+        for name, x in _STATEMENT_COLUMNS:
+            text(x, top, name, FONT_BOLD)
+
+    text(54, 38, COMPANY, FONT_BOLD, 16)
+    text(400, 40, "ACCOUNT STATEMENT", FONT_BOLD, 14)
+    for i, line in enumerate(_STATEMENT_DETAILS):
+        text(400, 110 + i * 13, line)
+    for i, line in enumerate(ADDRESSES["short"]):
+        text(54, 110 + i * 12, line)
+    for i, (label, value) in enumerate(_STATEMENT_SUMMARY):
+        text(54 + i * 130, 194, label, FONT_BOLD)
+        text(54 + i * 130, 208, value)
+    top = 244.0
+    header(top)
+    for r in range(spec.rows):
+        top += spec.row_step
+        if top > 700:
+            footer()
+            c.showPage()
+            top = 72.0
+            header(top)
+            top += spec.row_step
+        for (_, x), value in zip(_STATEMENT_COLUMNS, _statement_row(r), strict=True):
+            text(x, top, value)
+    text(54, top + 30, _STATEMENT_NOTE)
+    footer()
+    c.showPage()
+    c.save()
+    return out
+
+
 # ---------------------------------------------------------------- ground truth
 #: True purpose of every synthetic subject line (see ``data/purposes.json`` for the list).
 _PURPOSES = {
@@ -446,6 +522,29 @@ def letter_truth(spec: LetterSpec, layout: LayoutProfile) -> dict[str, Any]:
     }
 
 
+def statement_truth(spec: StatementSpec) -> dict[str, Any]:
+    """Ground truth of a synthetic statement. Fields are left out: every cell is data."""
+    cells = [name for name, _ in _STATEMENT_COLUMNS]
+    cells += [text for pair in _STATEMENT_SUMMARY for text in pair]
+    for r in range(spec.rows):
+        cells += _statement_row(r)
+    return {
+        "file": f"{spec.id}.pdf",
+        "layout": "statement",
+        "purpose": "statement",
+        "blocks": [
+            {"role": "letterhead", "lines": [COMPANY]},
+            {"role": "subject", "lines": ["ACCOUNT STATEMENT"]},
+            {"role": "date", "lines": _STATEMENT_DETAILS[:1]},
+            {"role": "reference", "lines": _STATEMENT_DETAILS[1:]},
+            {"role": "address", "lines": list(ADDRESSES["short"])},
+            {"role": "table", "lines": cells},
+            {"role": "body", "lines": [_STATEMENT_NOTE]},
+            {"role": "footer", "lines": [COMPANY_FOOTER]},
+        ],
+    }
+
+
 def _write_truth(out_dir: Path, letters: list[dict[str, Any]]) -> Path:
     path = out_dir / "truth.json"
     doc = {"version": 1, "letters": letters}
@@ -484,6 +583,11 @@ def generate(
                 "note": spec.note,
             }
         )
+    if letters is None and "statement" in by_id:
+        for st in STATEMENTS:
+            pdf = render_statement(st, out_dir / f"{st.id}.pdf")
+            manifest.append({"file": pdf.name, "expected_layout": "statement", "note": st.note})
+            truth.append(statement_truth(st))
     _write_truth(out_dir, truth)
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

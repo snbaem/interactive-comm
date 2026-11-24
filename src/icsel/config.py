@@ -16,7 +16,7 @@ from typing import Any
 from .profile import ROLES
 
 #: Roles that can be given a weight (the ones the matcher scores).
-SCORED_ROLES = ("address", "subject", "date", "body")
+SCORED_ROLES = ("address", "subject", "date", "body", "reference")
 
 
 class ConfigError(ValueError):
@@ -41,7 +41,13 @@ class ScoringConfig:
     """
 
     role_weights: dict[str, float] = field(
-        default_factory=lambda: {"address": 3.0, "subject": 3.0, "date": 1.0, "body": 2.0}
+        default_factory=lambda: {
+            "address": 3.0,
+            "subject": 3.0,
+            "date": 1.0,
+            "body": 2.0,
+            "reference": 1.0,
+        }
     )
     position_scale: float = 72.0
     closeness_share: float = 0.6

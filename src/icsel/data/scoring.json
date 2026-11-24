@@ -1,6 +1,6 @@
 {
   "_comment": "Default scoring settings for icsel. Copy this file, edit it and pass it with --config. Units are points (1 pt = 1/72 inch). See docs/scoring.md.",
-  "role_weights": {"address": 3.0, "subject": 3.0, "date": 1.0, "body": 2.0},
+  "role_weights": {"address": 3.0, "subject": 3.0, "date": 1.0, "body": 2.0, "reference": 1.0},
   "position_scale": 72.0,
   "closeness_share": 0.6,
   "width_tolerance": 18.0,

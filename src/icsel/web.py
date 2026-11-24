@@ -1,14 +1,20 @@
 """Local browser UI for icsel: ``icsel serve``.
 
 A small single-user web app built on the standard library's ``http.server``,
-so it needs no extra dependencies. It listens on ``127.0.0.1`` by default,
-makes no outbound network calls, and stores everything it produces under a
-local working folder (default ``out/web``).
+so it needs no extra dependencies. It listens on ``127.0.0.1`` by default and
+stores everything it produces under a local working folder (default ``out/web``).
+It makes no outbound network calls unless the optional AI step is turned on.
+
+An API key typed into the AI settings is kept in memory only: it is never written
+to disk, logged, or sent back to the browser. AI settings can be changed only while
+the server listens on a loopback address, and requests that change anything must
+come from the UI's own page.
 
 Endpoints (all JSON unless noted)::
 
     GET  /                               the single-page UI (HTML)
     GET  /api/info                       version, layouts, sample letters
+    POST /api/settings                   body = JSON; turn the AI step on or off
     POST /api/runs?name=<file.pdf>       body = PDF bytes; match an uploaded letter
     POST /api/runs?sample=<file.pdf>     match one of the generated sample letters
     POST /api/runs/<id>/render?layout=X  render the run's letter in layout X
@@ -40,7 +46,15 @@ import pdfplumber
 from . import __version__
 from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
-from .llm import Assistant, NoOpAssistant
+from .llm import (
+    Assistant,
+    LLMAuthError,
+    LLMError,
+    NoOpAssistant,
+    api_key_variable,
+    available_backends,
+    get_assistant,
+)
 from .match import LOW_FIT_THRESHOLD, MatchResult
 from .pipeline import analyze
 from .profile import LayoutProfile, load_profiles
@@ -54,6 +68,10 @@ DEFAULT_PORT = 8765
 PORT_ATTEMPTS = 20
 #: Largest accepted upload, in bytes.
 MAX_UPLOAD = 25 * 1024 * 1024
+#: Largest accepted settings request, in bytes.
+MAX_SETTINGS = 16 * 1024
+#: Longest accepted API key.
+MAX_KEY = 1024
 #: Resolution of PNG page previews.
 PREVIEW_DPI = 110
 #: Pages rendered as previews per PDF.
@@ -111,9 +129,16 @@ class App:
     """State and actions behind the HTTP handler. Safe to call from several threads."""
 
     def __init__(
-        self, layouts: list[LayoutProfile], workdir: Path, assistant: Assistant | None = None
+        self,
+        layouts: list[LayoutProfile],
+        workdir: Path,
+        assistant: Assistant | None = None,
+        settings_editable: bool = True,
     ) -> None:
         self.assistant: Assistant = assistant or NoOpAssistant()
+        self.settings_editable = settings_editable
+        self._keys: dict[str, str] = {}  # backend -> API key; memory only, never returned
+        self._settings_lock = threading.Lock()
         self.layouts = layouts
         self.by_id = {lay.id: lay for lay in layouts}
         self.workdir = Path(workdir)
@@ -130,9 +155,28 @@ class App:
             "version": __version__,
             "fidelity": APPROX_NOTE,
             "low_fit_threshold": LOW_FIT_THRESHOLD,
-            "llm": self.assistant.describe(),
+            **self.ai_info(),
             "layouts": [lay.to_dict() for lay in self.layouts],
             "samples": self.samples,
+        }
+
+    def ai_info(self) -> dict[str, Any]:
+        """State of the AI step and what its settings allow. Never contains a key."""
+        providers = []
+        for name in available_backends():
+            if name == "none":
+                continue
+            variable = api_key_variable(name)
+            if name in self._keys:
+                source = "app"
+            elif variable and os.environ.get(variable):
+                source = "environment"
+            else:
+                source = "none"
+            providers.append({"name": name, "uses_key": bool(variable), "key_source": source})
+        return {
+            "llm": self.assistant.describe(),
+            "ai_settings": {"editable": self.settings_editable, "providers": providers},
         }
 
     def run_file(self, run_id: str, filename: str) -> Path:
@@ -149,6 +193,65 @@ class App:
         return path
 
     # ------------------------------------------------------------------ actions
+    def update_settings(self, data: Any) -> dict[str, Any]:
+        """Turn the AI step on or off, and set or forget an API key.
+
+        ``data`` keys: ``enabled`` (bool, required), ``backend``, ``api_key`` (empty keeps
+        the current one), ``label_blocks`` (bool; allows sending text of unlabeled blocks)
+        and ``forget_key`` (bool; also turns the AI step off). Nothing changes on error.
+        """
+        if not self.settings_editable:
+            raise WebError(
+                HTTPStatus.FORBIDDEN,
+                "AI settings can be changed only when icsel listens on this computer only",
+            )
+        if not isinstance(data, dict) or not isinstance(data.get("enabled"), bool):
+            raise WebError(HTTPStatus.BAD_REQUEST, "expected a JSON object with 'enabled'")
+        with self._settings_lock:
+            if data.get("forget_key") is True:
+                self._keys.clear()
+                self.assistant = NoOpAssistant()
+                return self.ai_info()
+            if not data["enabled"]:
+                self.assistant = NoOpAssistant()
+                return self.ai_info()
+            return self._enable_ai(data)
+
+    def _enable_ai(self, data: dict[str, Any]) -> dict[str, Any]:
+        backend = str(data.get("backend", "")).strip().lower()
+        if backend == "none" or backend not in available_backends():
+            raise WebError(HTTPStatus.BAD_REQUEST, "unknown AI provider")
+        variable = api_key_variable(backend)
+        key = data.get("api_key") or ""
+        if not isinstance(key, str):
+            raise WebError(HTTPStatus.BAD_REQUEST, "the API key must be text")
+        key = key.strip()
+        # Printable ASCII without spaces: anything else cannot go in an HTTP header.
+        if key and (len(key) > MAX_KEY or not re.fullmatch(r"[!-~]+", key)):
+            raise WebError(HTTPStatus.BAD_REQUEST, "that does not look like an API key")
+        key = key or self._keys.get(backend, "")
+        tasks = "classify,explain" if data.get("label_blocks") is True else "explain"
+        env = {**os.environ, "ICSEL_LLM_TASKS": tasks}
+        if variable and key:
+            env[variable] = key
+        try:
+            assistant = get_assistant(backend, env)
+        except LLMError as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+        warning = None
+        check = getattr(assistant, "check", None)
+        try:
+            if check is not None:
+                check()
+        except LLMAuthError as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+        except LLMError as exc:
+            warning = f"AI is on, but the key could not be checked: {exc}"
+        if variable and key:
+            self._keys[backend] = key
+        self.assistant = assistant
+        return {**self.ai_info(), "warning": warning}
+
     def create_run(self, name: str, data: bytes | None = None, sample: str | None = None) -> dict:
         """Match an uploaded PDF (``data``) or a sample letter (``sample``)."""
         run_id = uuid.uuid4().hex[:12]
@@ -300,6 +403,7 @@ class _Handler(BaseHTTPRequestHandler):
             raise WebError(HTTPStatus.NOT_FOUND, "not found")
 
     def _post(self) -> None:
+        self._check_same_site()
         url = urlsplit(self.path)
         parts = [p for p in url.path.split("/") if p]
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
@@ -309,21 +413,47 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             name = Path(query.get("name", "upload.pdf")).name or "upload.pdf"
             self._json(self.app.create_run(name, data=self._read_body()))
+        elif parts == ["api", "settings"]:
+            self._json(self.app.update_settings(self._read_json()))
         elif len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "render":
             self._json(self.app.render(parts[2], query.get("layout", "")))
         else:
             raise WebError(HTTPStatus.NOT_FOUND, "not found")
 
-    def _read_body(self) -> bytes:
+    def _check_same_site(self) -> None:
+        """Refuse requests sent by other web pages (CSRF and DNS rebinding).
+
+        The server has no login, so without this any page open in the browser could
+        change settings or spend the user's API credit.
+        """
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin")
+        if origin is not None and origin.lower() != f"http://{host.lower()}":
+            raise WebError(HTTPStatus.FORBIDDEN, "request from another site refused")
+        try:
+            name = urlsplit(f"//{host}").hostname or ""
+        except ValueError:
+            name = ""
+        if self.app.settings_editable and not _is_loopback(name):
+            raise WebError(HTTPStatus.FORBIDDEN, "unexpected Host header")
+
+    def _read_json(self) -> Any:
+        # A JSON content type cannot be sent cross-site without a CORS preflight.
+        if self.headers.get_content_type() != "application/json":
+            raise WebError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "expected application/json")
+        try:
+            return json.loads(self._read_body(MAX_SETTINGS))
+        except ValueError as exc:
+            raise WebError(HTTPStatus.BAD_REQUEST, "request body is not valid JSON") from exc
+
+    def _read_body(self, limit: int = MAX_UPLOAD) -> bytes:
         try:
             length = int(self.headers.get("Content-Length", ""))
         except ValueError as exc:
             raise WebError(HTTPStatus.LENGTH_REQUIRED, "Content-Length header required") from exc
-        if length > MAX_UPLOAD:
-            raise WebError(
-                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                f"file is larger than {MAX_UPLOAD // (1024 * 1024)} MB",
-            )
+        if length < 0 or length > limit:
+            size = f"{limit // (1024 * 1024)} MB" if limit == MAX_UPLOAD else f"{limit} bytes"
+            raise WebError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"request is larger than {size}")
         return self.rfile.read(length)
 
 
@@ -361,7 +491,12 @@ def make_server(
     Raises:
         OSError: If the port (or every port tried) is in use.
     """
-    app = App(layouts if layouts is not None else load_profiles(), workdir, assistant)
+    app = App(
+        layouts if layouts is not None else load_profiles(),
+        workdir,
+        assistant,
+        settings_editable=_is_loopback(host),
+    )
     handler = type("Handler", (_Handler,), {"app": app})
     if port is not None:
         return _Server((host, port), handler)

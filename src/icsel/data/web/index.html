@@ -12,6 +12,7 @@
   --zone: #1d2330;
   --r-letterhead: #8b5cf6; --r-date: #0ea5e9; --r-address: #10b981; --r-subject: #f59e0b;
   --r-salutation: #ec4899; --r-body: #3b82f6; --r-closing: #6366f1; --r-footer: #64748b;
+  --r-reference: #14b8a6; --r-table: #a16207;
   --r-unknown: #ef4444;
 }
 @media (prefers-color-scheme: dark) {
@@ -120,6 +121,28 @@ select.picker { font: inherit; font-size: 13px; padding: 4px 8px; border-radius:
 .pstatus .fail { width: 100%; }
 .unplaced-note { width: 100%; background: #fff1c7; color: #6b4e00; border-radius: 6px;
   padding: 4px 8px; cursor: help; }
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+.switch input { appearance: none; width: 34px; height: 20px; margin: 0; border-radius: 99px; flex: none;
+  background: var(--muted); position: relative; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; transition: left .15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { left: 17px; }
+.switch input:focus-visible, .ai-form :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:disabled, .switch:has(input:disabled) { cursor: not-allowed; opacity: .6; }
+.ai-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.ai-form[hidden] { display: none; }
+.ai-form .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; }
+.ai-form input[type=password], .ai-form select { font: inherit; font-weight: 400; font-size: 13px;
+  width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); }
+.ai-form .check { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; cursor: pointer; }
+.ai-form .check input { margin: 3px 0 0; flex: none; }
+.ai-sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 6px; }
+.ai-form .ai-sub { margin-top: 0; }
+.ai-msg { font-size: 12.5px; margin-top: 10px; overflow-wrap: anywhere; }
+.ai-msg:empty { display: none; }
+.ai-msg.ok { color: var(--ok); } .ai-msg.bad { color: var(--bad); } .ai-msg.warn { color: var(--warn); }
 footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
 </style>
 </head>
@@ -139,8 +162,33 @@ footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
       <label class="drop" id="drop">
         <input type="file" id="file" accept=".pdf,application/pdf" multiple hidden>
         <div><strong>Choose PDF</strong> or drop it here</div>
-        <div style="font-size:12px;margin-top:4px">Text-based letter PDFs. Files stay on this computer.</div>
+        <div style="font-size:12px;margin-top:4px">Text-based letter PDFs. <span id="privacy"></span></div>
       </label>
+    </div>
+    <div class="card" id="ai-card">
+      <h2>AI settings</h2>
+      <label class="switch"><input type="checkbox" role="switch" id="ai-switch" disabled> Use AI</label>
+      <div class="ai-sub" id="ai-state"></div>
+      <form class="ai-form" id="ai-form" autocomplete="off" hidden>
+        <label class="field" id="ai-provider-field">Provider
+          <select id="ai-provider"></select>
+        </label>
+        <label class="field" id="ai-key-field">API key
+          <input type="password" id="ai-key" autocomplete="new-password" spellcheck="false"
+            autocapitalize="off" maxlength="1024">
+          <span class="ai-sub" id="ai-key-hint"></span>
+        </label>
+        <label class="check"><input type="checkbox" id="ai-label">
+          <span>Let AI label blocks the rules cannot
+            <span class="ai-sub" style="display:block">Sends the text of those blocks to the provider.
+              Without it, only layout facts and scores are sent.</span></span>
+        </label>
+        <div class="links">
+          <button class="btn primary" type="submit" id="ai-save">Turn on</button>
+          <button class="btn" type="button" id="ai-forget">Forget key</button>
+        </div>
+      </form>
+      <div class="ai-msg" id="ai-msg" role="status"></div>
     </div>
     <div class="card">
       <h2>Sample letters (synthetic)</h2>
@@ -172,7 +220,7 @@ footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
 
 <script>
 "use strict";
-const ROLES = ["letterhead","date","address","subject","salutation","body","closing","footer","unknown"];
+const ROLES = ["letterhead","date","address","subject","salutation","body","closing","footer","reference","table","unknown"];
 const state = { info: null, runs: new Map(), run: null, srcPage: 0, smpPage: 0,
   showBlocks: true, showZones: true, hoverBlock: null, busy: false, srcSvg: null };
 
@@ -513,15 +561,97 @@ function wireUpload() {
     if (files.length) runUpload(files); else showError("Drop a .pdf file.");
   });
 }
+/* Must match what the assistant sends: "classify" sends letter text, "explain" does not. */
+function privacyNote(ai) {
+  if (!ai.enabled) return "Files stay on this computer.";
+  return (ai.tasks || []).includes("classify")
+    ? "AI step on: text the rules cannot label, plus layout facts and scores, is sent to "
+      + ai.backend + ". Only use letters you are allowed to send there."
+    : "AI step on: layout facts and scores are sent to " + ai.backend + ". No letter text is sent.";
+}
+// ------------------------------------------------------------------ AI settings
+const el = id => document.getElementById(id);
+function aiMessage(text, kind) {
+  el("ai-msg").textContent = text || "";
+  el("ai-msg").className = "ai-msg " + (kind || "");
+}
+function aiProvider() {
+  return state.info.ai_settings.providers.find(p => p.name === el("ai-provider").value);
+}
+function renderAiKey() {
+  const p = aiProvider();
+  el("ai-key-field").hidden = !p.uses_key;
+  el("ai-key-field").style.display = p.uses_key ? "" : "none";
+  el("ai-key").placeholder = p.key_source === "none" ? "Paste your key" : "Leave blank to keep the current key";
+  el("ai-key-hint").textContent =
+    p.key_source === "app" ? "A key is saved until icsel stops."
+    : p.key_source === "environment" ? "A key from the environment is used unless you enter one here."
+    : "Kept in memory until icsel stops. Never written to disk.";
+  el("ai-forget").style.display =
+    state.info.ai_settings.providers.some(x => x.key_source === "app") ? "" : "none";
+}
+/* Show the server's state. The form shows while AI is on, or while the user is turning it on. */
+function renderAi() {
+  const ai = state.info.llm || {};
+  const settings = state.info.ai_settings;
+  el("ai-status").textContent = ai.enabled ? "AI step on · " + ai.backend + " / " + ai.model : "AI step off";
+  el("privacy").textContent = privacyNote(ai);
+  el("ai-switch").checked = !!ai.enabled;
+  el("ai-switch").disabled = !settings.editable;
+  el("ai-form").hidden = !ai.enabled || !settings.editable;
+  el("ai-state").textContent = (ai.enabled ? "On · " + ai.backend + " / " + ai.model
+    : "Off. No letter data leaves this computer.")
+    + (settings.editable ? "" : " Settings are locked because icsel is reachable from other computers.");
+  el("ai-provider").replaceChildren(...settings.providers.map(p =>
+    h("option", { value: p.name, selected: p.name === ai.backend }, p.name)));
+  el("ai-label").checked = ai.enabled ? (ai.tasks || []).includes("classify") : false;
+  el("ai-save").textContent = ai.enabled ? "Save changes" : "Turn on";
+  renderAiKey();
+}
+async function saveAi(body, done) {
+  const controls = ["ai-switch", "ai-save", "ai-forget"].map(el);
+  controls.forEach(c => { c.disabled = true; });
+  aiMessage(body.enabled ? "Checking the key …" : "");
+  try {
+    const res = await api("POST", "/api/settings", JSON.stringify(body), { "Content-Type": "application/json" });
+    state.info.llm = res.llm;
+    state.info.ai_settings = res.ai_settings;
+    el("ai-key").value = "";
+    renderAi();
+    aiMessage(res.warning || done, res.warning ? "warn" : "ok");
+  } catch (e) {
+    if (!body.enabled) renderAi();
+    aiMessage(e.message, "bad");
+  } finally {
+    controls.forEach(c => { c.disabled = false; });
+  }
+}
+function wireAi() {
+  el("ai-switch").addEventListener("change", () => {
+    const on = el("ai-switch").checked;
+    if (state.info.llm.enabled) { if (!on) saveAi({ enabled: false }, "AI is off."); return; }
+    // Turning on only opens the form: nothing is sent until "Turn on".
+    el("ai-form").hidden = !on;
+    el("ai-key").value = "";
+    aiMessage(on ? "Not on yet: choose options, then Turn on." : "", "warn");
+    if (on) el("ai-key").focus();
+  });
+  el("ai-provider").addEventListener("change", renderAiKey);
+  el("ai-form").addEventListener("submit", e => {
+    e.preventDefault();
+    saveAi({ enabled: true, backend: el("ai-provider").value, api_key: el("ai-key").value.trim(),
+             label_blocks: el("ai-label").checked }, "AI is on. It applies to the next letter you open.");
+  });
+  el("ai-forget").addEventListener("click", () =>
+    saveAi({ enabled: false, forget_key: true }, "Key forgotten. AI is off."));
+}
 (async function boot() {
   wireUpload();
+  wireAi();
   try {
     state.info = await api("GET", "/api/info");
     document.getElementById("version").textContent = "v" + state.info.version;
-    const ai = state.info.llm || {};
-    document.getElementById("ai-status").textContent = ai.enabled
-      ? "AI step on · " + ai.backend + " / " + ai.model
-      : "AI step off";
+    renderAi();
     document.getElementById("fidelity").textContent = state.info.fidelity;
     renderSidebar();
   } catch (e) { showError("Cannot reach the icsel server: " + e.message); }

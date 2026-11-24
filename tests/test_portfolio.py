@@ -274,12 +274,13 @@ def test_handles_more_than_a_hundred_pdfs(
     letters_dir: Path, tmp_path: Path, layouts: list[LayoutProfile]
 ) -> None:
     sources = sorted(letters_dir.glob("*.pdf"))
-    for n in range(20):
+    for n in range(8):
         for src in sources:
             shutil.copy(src, tmp_path / f"c{n:02d}-{src.name}")
     seen: list[tuple[int, int]] = []
     recs = scan(sorted(tmp_path.glob("*.pdf")), layouts, progress=lambda i, t: seen.append((i, t)))
-    total = len(sources) * 20
+    total = len(sources) * 8
+    assert total > 100
     assert len(recs) == total and all(r.status == "ok" for r in recs)
     assert seen[-1] == (total, total)
     groups = find_duplicate_groups(recs)

@@ -55,7 +55,10 @@ def test_partial_config_keeps_other_defaults() -> None:
         ({"role_weights": {"footer": 1}}, "not scored"),
         ({"role_weights": {"nope": 1}}, "unknown role"),
         ({"role_weights": {"address": -1}}, "must not be negative"),
-        ({"role_weights": {"address": 0, "subject": 0, "date": 0, "body": 0}}, "all be zero"),
+        (
+            {"role_weights": {"address": 0, "subject": 0, "date": 0, "body": 0, "reference": 0}},
+            "all be zero",
+        ),
     ],
 )
 def test_bad_config_is_rejected_with_a_clear_message(data: dict, message: str) -> None:

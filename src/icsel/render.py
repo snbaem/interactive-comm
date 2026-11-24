@@ -8,6 +8,7 @@ data binding or pagination rules.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -44,7 +45,7 @@ _LEADING = _SIZE + 2
 _OVERFLOW = colors.HexColor("#c62828")
 
 #: Page-1 roles whose text is placed into a fixed-size zone (the body flows instead).
-FIXED_ROLES = ("date", "address", "subject")
+FIXED_ROLES = ("date", "address", "subject", "reference")
 
 
 @dataclass
@@ -148,9 +149,9 @@ def _draw_outline(c: Canvas, page_h: float, zone: Zone) -> None:
 
 
 #: Roles drawn into a fixed zone of the same role when the layout has one.
-ZONED_ROLES = ("letterhead", "date", "address", "subject", "footer")
+ZONED_ROLES = ("letterhead", "date", "address", "subject", "reference", "footer")
 #: Roles that belong in the body flow.
-FLOW_ROLES = ("salutation", "body", "closing")
+FLOW_ROLES = ("salutation", "body", "closing", "table")
 
 _UNPLACED_BG = colors.HexColor("#fff1c7")
 _TABLE_GRID = colors.HexColor("#c9d1dc")
@@ -225,6 +226,56 @@ def _para_text(b: Block) -> str:
     return f"<b>{text}</b>" if b.bold else text
 
 
+def _statement_table(rows: list[list[Block]], width: float) -> tuple[Flowable, int]:
+    """Build one table from the leading ``rows`` of table cells; return it and rows used.
+
+    Cells go into the column they overlap horizontally. A row with a cell that overlaps
+    no column starts a new table. A bold first row is repeated on every page.
+    """
+    columns = [[b.x, b.right] for b in rows[0]]
+    grid: list[list[list[Block]]] = []
+    for row in rows:
+        if any(b.role != "table" for b in row):
+            break
+        spots = []
+        for b in row:
+            overlap = [min(b.right, hi) - max(b.x, lo) for lo, hi in columns]
+            best = max(range(len(columns)), key=overlap.__getitem__)
+            if overlap[best] <= 0:
+                break
+            spots.append(best)
+        if len(spots) < len(row):
+            break
+        cells: list[list[Block]] = [[] for _ in columns]
+        for b, i in zip(row, spots, strict=True):
+            cells[i].append(b)
+            columns[i] = [min(columns[i][0], b.x), max(columns[i][1], b.right)]
+        grid.append(cells)
+    starts = [lo for lo, _ in columns]
+    spans = [max(b - a, 24.0) for a, b in pairwise(starts)]
+    spans.append(max(columns[-1][1] - starts[-1], 48.0))
+    data = [
+        [Paragraph(" ".join(_para_text(b) for b in cell), _CELL) for cell in row] for row in grid
+    ]
+    table = Table(
+        data,
+        colWidths=[width * s / sum(spans) for s in spans],
+        hAlign="LEFT",
+        repeatRows=int(len(grid) > 1 and all(b.bold for cell in grid[0] for b in cell)),
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("LINEBELOW", (0, 0), (-1, -1), 0.4, _TABLE_GRID),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    return table, len(grid)
+
+
 def _flow_story(placement: Placement, width: float, mark: bool) -> list[Flowable]:
     unplaced = {id(b) for b in placement.unplaced}
     story: list[Flowable] = []
@@ -232,6 +283,11 @@ def _flow_story(placement: Placement, width: float, mark: bool) -> list[Flowable
     i = 0
     while i < len(rows):
         row = rows[i]
+        if all(b.role == "table" for b in row):
+            table, used = _statement_table(rows[i:], width)
+            story += [table, Spacer(1, 8)]
+            i += used
+            continue
         if len(row) == 1:
             b = row[0]
             style = _UNPLACED if (mark and id(b) in unplaced) else _BODY

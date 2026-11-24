@@ -25,6 +25,10 @@ class LLMError(RuntimeError):
     """The AI step failed or is misconfigured. Matching continues without it."""
 
 
+class LLMAuthError(LLMError):
+    """The provider has no usable credentials (missing, wrong or not permitted)."""
+
+
 class LLMCallLimit(LLMError):
     """The run reached its cap on model calls (``--max-calls``)."""
 
