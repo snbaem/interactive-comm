@@ -18,11 +18,13 @@ from typing import Any
 from . import __version__
 from .config import ConfigError, load_config
 from .dimensions import UNITS, diff_layouts, measure
+from .evaluate import LETTER_TASKS, TruthError, collect_truth, eval_markdown, evaluate
 from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
 from .layoutview import pdf_to_png, render_comparison, render_layout_view
 from .llm import Assistant, LLMError, available_backends, get_assistant
+from .llm.assistant import DEFAULT_TASKS, TASKS
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
 from .pipeline import analyze
 from .portfolio import (
@@ -126,7 +128,7 @@ def cmd_match(args: argparse.Namespace) -> int:
     scoring = load_config(args.config)
     by_id = {lay.id: lay for lay in layouts}
     letters = collect_files(args.letters, ".pdf", recursive=args.recursive)
-    assistant = get_assistant(args.llm)
+    assistant = _assistant_from_args(args)
     if assistant.enabled:
         _print_ai_notice(assistant)
     stems = unique_stems(letters)
@@ -291,6 +293,11 @@ def _progress(label: str) -> Any:
     return show
 
 
+def _assistant_from_args(args: argparse.Namespace) -> Assistant:
+    """The assistant for ``--llm`` and the other AI options of a command."""
+    return get_assistant(args.llm, tasks=args.ai_tasks, max_calls=args.max_calls)
+
+
 def _confirm(question: str) -> bool:
     """Ask a yes/no question; anything but an interactive "y" or "yes" means no."""
     if not sys.stdin.isatty():
@@ -338,7 +345,7 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         args.duplicate_threshold,
         scoring,
     )
-    assistant = get_assistant(args.llm)
+    assistant = _assistant_from_args(args)
     print(f"Matching {len(paths)} PDF(s) against {len(layouts)} layout(s)...", file=sys.stderr)
     records = scan(paths, layouts, settings, _progress("matched"))
     groups = find_duplicate_groups(records, settings.duplicate_threshold)
@@ -358,6 +365,41 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     if unreadable:
         print(f"{unreadable} of {len(records)} file(s) could not be matched.", file=sys.stderr)
         return EXIT_SOME_FAILED
+    return EXIT_OK
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Benchmark the rules, and the rules plus each AI task, against the ground truth."""
+    layouts = load_profiles(args.layouts)
+    scoring = load_config(args.config)
+    paths = collect_files(args.letters, ".pdf", recursive=args.recursive)
+    letters, skipped = collect_truth(paths, args.truth)
+    if not letters:
+        raise TruthError("no readable letter has an entry in the ground-truth file")
+    assistant: Assistant | None = _assistant_from_args(args)
+    if assistant is not None and assistant.enabled:
+        _print_ai_notice(assistant)
+        tasks = [t for t in getattr(assistant, "tasks", ()) if t in LETTER_TASKS]
+        most = len(letters) * len(tasks)
+        if args.max_calls is not None:
+            most = min(most, args.max_calls)
+        print(f"AI step plan: up to {most} model call(s) for {len(letters)} letter(s).")
+        if most and not (args.yes or _confirm("Proceed with the AI step? [y/N] ")):
+            print("Skipped the AI step; evaluating the rules only.")
+            assistant = None
+    else:
+        assistant = None
+    doc = evaluate(letters, layouts, assistant, scoring, _progress("evaluated"))
+    doc["skipped_files"] = skipped
+    text = eval_markdown(doc)
+    out: Path = args.out
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "eval.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    (out / "eval.md").write_text(text, encoding="utf-8")
+    print(text)
+    if skipped:
+        print(f"{skipped} file(s) without truth or text were skipped.", file=sys.stderr)
+    print(f"Wrote {out / 'eval.json'} and {out / 'eval.md'}")
     return EXIT_OK
 
 
@@ -383,6 +425,31 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: cannot listen on {where} ({exc})", file=sys.stderr)
         return EXIT_USAGE
     return EXIT_OK
+
+
+def _call_cap(text: str) -> int:
+    """Argument type of ``--max-calls``: a whole number, 0 or more."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return value
+
+
+def _add_ai_options(parser: argparse.ArgumentParser, llm_help: str) -> None:
+    """Options shared by the commands that can run the AI step."""
+    parser.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    parser.add_argument(
+        "--ai-tasks",
+        metavar="LIST",
+        help="comma list of AI tasks: "
+        + ", ".join(TASKS)
+        + " (default: ICSEL_LLM_TASKS, else "
+        + ",".join(DEFAULT_TASKS)
+        + ")",
+    )
+    parser.add_argument(
+        "--max-calls", type=_call_cap, metavar="N", help="hard cap on model calls for this run"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -435,7 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--units", choices=UNITS, default="in", help="units for measurements (default: in)"
     )
     m.add_argument("--config", type=Path, metavar="FILE", help=config_help)
-    m.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    _add_ai_options(m, llm_help)
     m.set_defaults(func=cmd_match)
 
     sl = sub.add_parser(
@@ -518,7 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="body-text similarity at or above which letters are near-duplicates "
         f"(default: {DUPLICATE_THRESHOLD})",
     )
-    po.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    _add_ai_options(po, llm_help)
     po.add_argument(
         "--yes",
         action="store_true",
@@ -541,6 +608,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--layouts", type=Path, help="layout folder (default: bundled examples)")
     s.set_defaults(func=cmd_samples)
+
+    ev = sub.add_parser(
+        "eval", help="benchmark the rules, and each AI task, against ground-truth letters"
+    )
+    ev.add_argument(
+        "letters",
+        nargs="+",
+        type=Path,
+        metavar="PATH",
+        help="letter PDF(s), folder(s) or glob pattern(s)",
+    )
+    ev.add_argument(
+        "--truth", type=Path, metavar="FILE", help="ground truth (default: truth.json next to each)"
+    )
+    ev.add_argument("--layouts", action="append", type=Path, metavar="PATH", help=layouts_help)
+    ev.add_argument("--config", type=Path, metavar="FILE", help=config_help)
+    ev.add_argument(
+        "--out",
+        type=Path,
+        default=Path("out") / "eval",
+        help="folder for eval.json and eval.md (default: out/eval)",
+    )
+    ev.add_argument("-r", "--recursive", action="store_true", help="also search subfolders")
+    _add_ai_options(ev, llm_help)
+    ev.add_argument(
+        "--yes",
+        action="store_true",
+        help="run the AI step without asking after the call estimate (needed when not interactive)",
+    )
+    ev.set_defaults(func=cmd_eval)
 
     w = sub.add_parser("serve", help="open a local browser UI to try letters and layouts")
     w.add_argument("--host", default="127.0.0.1", help="address to listen on (default: 127.0.0.1)")
@@ -574,6 +671,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except (ExtractionError, ProfileError, ConfigError, InputError, LLMError) as exc:
+    except (
+        ExtractionError,
+        ProfileError,
+        ConfigError,
+        InputError,
+        LLMError,
+        TruthError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

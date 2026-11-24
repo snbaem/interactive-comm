@@ -13,7 +13,7 @@ import os
 from collections.abc import Callable, Mapping
 
 from .anthropic_backend import AnthropicBackend
-from .assistant import TASKS, LLMAssistant
+from .assistant import DEFAULT_TASKS, LLMAssistant
 from .base import Assistant, CompletionBackend, LLMError, NoOpAssistant
 
 ENV_VAR = "ICSEL_LLM"
@@ -36,8 +36,19 @@ def available_backends() -> list[str]:
     return ["none", *sorted(_FACTORIES)]
 
 
-def get_assistant(name: str | None = None, env: Mapping[str, str] | None = None) -> Assistant:
+def get_assistant(
+    name: str | None = None,
+    env: Mapping[str, str] | None = None,
+    tasks: str | None = None,
+    max_calls: int | None = None,
+) -> Assistant:
     """Return the configured assistant (the no-op one unless explicitly enabled).
+
+    Args:
+        name: Backend name; ``None`` uses ``ICSEL_LLM``.
+        env: Settings; defaults to the process environment.
+        tasks: Comma list overriding ``ICSEL_LLM_TASKS``.
+        max_calls: Hard cap on model calls for this run.
 
     Raises:
         LLMError: For an unknown backend name or invalid settings.
@@ -55,7 +66,8 @@ def get_assistant(name: str | None = None, env: Mapping[str, str] | None = None)
         min_confidence = float(env.get("ICSEL_LLM_MIN_CONFIDENCE", "0.5"))
     except ValueError as exc:
         raise LLMError(f"invalid ICSEL_LLM_MIN_CONFIDENCE: {exc}") from exc
-    tasks = tuple(
-        t.strip() for t in env.get("ICSEL_LLM_TASKS", ",".join(TASKS)).split(",") if t.strip()
+    listed = env.get("ICSEL_LLM_TASKS", ",".join(DEFAULT_TASKS)) if tasks is None else tasks
+    chosen = tuple(t.strip() for t in listed.split(",") if t.strip())
+    return LLMAssistant(
+        factory(env), min_confidence=min_confidence, tasks=chosen, max_calls=max_calls
     )
-    return LLMAssistant(factory(env), min_confidence=min_confidence, tasks=tasks)

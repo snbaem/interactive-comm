@@ -80,6 +80,8 @@ class AnthropicBackend:
         self.effort = effort
         self.max_tokens = max_tokens
         self.fallbacks = fallbacks
+        #: Token counts of the last reply, for reports (``icsel eval``).
+        self.last_usage: dict[str, int] | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> AnthropicBackend:
@@ -115,6 +117,12 @@ class AnthropicBackend:
             response = self.client.beta.messages.create(**kwargs)
         except _api_errors() as exc:
             raise LLMError(f"Anthropic API call failed: {exc}") from exc
+        usage = getattr(response, "usage", None)
+        self.last_usage = (
+            {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+            if usage is not None
+            else None
+        )
         if response.stop_reason == "refusal":
             raise LLMError("the model declined this request")
         if response.stop_reason == "max_tokens":

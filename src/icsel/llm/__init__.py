@@ -4,6 +4,7 @@ from .assistant import LLMAssistant, apply_suggestions, fit_facts
 from .base import (
     Assistant,
     CompletionBackend,
+    LLMCallLimit,
     LLMError,
     NoOpAssistant,
     RoleChange,
@@ -15,6 +16,7 @@ __all__ = [
     "Assistant",
     "CompletionBackend",
     "LLMAssistant",
+    "LLMCallLimit",
     "LLMError",
     "NoOpAssistant",
     "RoleChange",

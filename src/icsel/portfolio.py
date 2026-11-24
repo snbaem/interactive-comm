@@ -42,7 +42,7 @@ from typing import Any
 from .config import ScoringConfig
 from .dimensions import letter_vs_layout
 from .extract import ExtractionError, LetterStructure, NoTextError, extract
-from .llm import Assistant, LLMError, apply_suggestions, fit_facts
+from .llm import Assistant, LLMCallLimit, LLMError, apply_suggestions, fit_facts
 from .match import CAPACITY_ROLES, LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
 from .profile import LayoutProfile
 
@@ -376,6 +376,8 @@ def run_ai(
                     fit_facts(letter, tb.results, changes)
                 )
             failures_in_a_row = 0
+        except LLMCallLimit as exc:
+            return f"AI step stopped: {exc}. The rest of the report is rule-based."
         except LLMError as exc:
             record.ai_error = str(exc)
             failures_in_a_row += 1

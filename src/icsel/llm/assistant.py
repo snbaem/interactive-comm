@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from ..extract import LetterStructure
 from ..match import LOW_FIT_THRESHOLD, MatchResult
 from ..profile import ROLES
-from .base import CompletionBackend, LLMError, RoleChange, Suggestion
+from .base import CompletionBackend, LLMCallLimit, LLMError, RoleChange, Suggestion
 from .prompts import render_prompt
 
 #: Most characters of one unknown block's text that are sent.
@@ -33,6 +34,10 @@ MAX_BLOCK_TEXT = 600
 SINGLE_ROLES = ("date", "address", "subject")
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
 TASKS = ("classify", "explain")
+#: Jobs that run when AI is on and no task list is given.
+DEFAULT_TASKS = ("classify", "explain")
+
+T = TypeVar("T")
 
 CLASSIFY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -190,7 +195,8 @@ class LLMAssistant:
         self,
         backend: CompletionBackend,
         min_confidence: float = 0.5,
-        tasks: tuple[str, ...] = TASKS,
+        tasks: tuple[str, ...] = DEFAULT_TASKS,
+        max_calls: int | None = None,
     ) -> None:
         unknown = set(tasks) - set(TASKS)
         if unknown:
@@ -198,6 +204,14 @@ class LLMAssistant:
         self.backend = backend
         self.min_confidence = min_confidence
         self.tasks = tuple(tasks)
+        self.max_calls = max_calls
+        #: Model calls made, replies taken from the cache, and model items that were
+        #: dropped by validation (``"task: reason"`` -> count).
+        self.calls = 0
+        self.cache_hits = 0
+        self.drops: Counter[str] = Counter()
+        #: Token totals, or ``None`` until the backend reports usage.
+        self.tokens: dict[str, int] | None = None
 
     def describe(self) -> dict[str, Any]:
         """Backend, model and enabled tasks."""
@@ -208,6 +222,43 @@ class LLMAssistant:
             "tasks": list(self.tasks),
         }
 
+    def counters(self) -> dict[str, Any]:
+        """Snapshot of calls, cache hits, tokens and dropped items so far."""
+        return {
+            "calls": self.calls,
+            "cache_hits": self.cache_hits,
+            "tokens": None if self.tokens is None else dict(self.tokens),
+            "drops": dict(self.drops),
+        }
+
+    def _drop(self, task: str, reason: str) -> None:
+        self.drops[f"{task}: {reason}"] += 1
+
+    def _count_usage(self) -> None:
+        """Add the backend's optional ``last_usage`` (token name -> count) to the totals."""
+        usage = getattr(self.backend, "last_usage", None)
+        if usage:
+            self.tokens = self.tokens or {}
+            for key, n in usage.items():
+                self.tokens[key] = self.tokens.get(key, 0) + int(n)
+
+    def _ask(
+        self,
+        task: str,
+        template: str,
+        parse: Callable[[str], T],
+        schema: dict[str, Any] | None = None,
+        **values: str,
+    ) -> T:
+        """Render a prompt, call the model (within the cap) and validate the reply."""
+        system, prompt = render_prompt(template, **values)
+        if self.max_calls is not None and self.calls >= self.max_calls:
+            raise LLMCallLimit(f"reached the cap of {self.max_calls} model call(s)")
+        self.calls += 1
+        raw = self.backend.complete(system, prompt, schema)
+        self._count_usage()
+        return parse(raw)
+
     def classify_unknown(self, letter: LetterStructure) -> list[Suggestion]:
         """Ask the model about ``unknown`` blocks. No call is made if there are none."""
         if "classify" not in self.tasks:
@@ -215,17 +266,22 @@ class LLMAssistant:
         payload = classification_payload(letter)
         if not payload["unknown_indexes"]:
             return []
-        system, prompt = render_prompt(
+        return self._ask(
+            "classify",
             "classify_blocks",
+            parse_suggestions,
+            CLASSIFY_SCHEMA,
             roles=", ".join(r for r in ROLES if r != "unknown"),
             payload=json.dumps(payload, indent=2),
         )
-        return parse_suggestions(self.backend.complete(system, prompt, CLASSIFY_SCHEMA))
 
     def explain_fit(self, facts: dict[str, Any]) -> str | None:
         """Ask the model for a short explanation of the ranking."""
         if "explain" not in self.tasks:
             return None
-        system, prompt = render_prompt("explain_fit", facts=json.dumps(facts, indent=2))
-        text = self.backend.complete(system, prompt).strip()
-        return text or None
+        return self._ask(
+            "explain",
+            "explain_fit",
+            lambda raw: raw.strip() or None,
+            facts=json.dumps(facts, indent=2),
+        )
