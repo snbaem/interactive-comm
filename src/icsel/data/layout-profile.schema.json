@@ -9,6 +9,7 @@
     "id": {"type": "string", "minLength": 1},
     "name": {"type": "string"},
     "description": {"type": "string"},
+    "kind": {"enum": ["letter", "statement"]},
     "page": {
       "type": "object",
       "required": ["width", "height"],
@@ -27,7 +28,7 @@
         "additionalProperties": false,
         "properties": {
           "role": {
-            "enum": ["letterhead", "address", "date", "subject", "salutation", "body", "closing", "footer", "unknown"]
+            "enum": ["letterhead", "address", "date", "subject", "salutation", "body", "closing", "footer", "unknown", "reference", "table"]
           },
           "x": {"type": "number", "minimum": 0},
           "y": {"type": "number", "minimum": 0},

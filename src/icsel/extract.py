@@ -21,6 +21,8 @@ from typing import Any
 
 import pdfplumber
 
+from .statement import label_statement
+
 #: Horizontal gap (pt) that splits one text line into separate segments.
 SEGMENT_GAP = 18.0
 #: Max left-edge difference (pt) for two segments to belong to one block.
@@ -63,7 +65,7 @@ def _is_icsel_mark(word: dict[str, Any]) -> bool:
 
 
 #: Roles that together make up the "body" area of a letter.
-BODY_ROLES = ("salutation", "body", "closing")
+BODY_ROLES = ("salutation", "body", "closing", "table")
 
 _MONTHS = (
     r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?"
@@ -157,6 +159,8 @@ class LetterStructure:
     page_height: float
     page_count: int
     blocks: list[Block] = field(default_factory=list)
+    #: ``letter`` or ``statement`` (see :mod:`icsel.statement`).
+    kind: str = "letter"
 
     def blocks_with(self, *roles: str, page: int | None = None) -> list[Block]:
         """Blocks having any of ``roles``, optionally restricted to one page."""
@@ -201,6 +205,7 @@ class LetterStructure:
             "source": self.source,
             "page": {"width": self.page_width, "height": self.page_height, "units": "pt"},
             "page_count": self.page_count,
+            **({"kind": self.kind} if self.kind != "letter" else {}),
             "blocks": [b.to_dict() for b in self.blocks],
         }
 
@@ -403,4 +408,5 @@ def extract(pdf_path: Path) -> LetterStructure:
         raise NoTextError(f"{pdf_path}: no extractable text (scanned or image-only PDF?)")
     structure.blocks.sort(key=lambda b: (b.page, b.y, b.x))
     _classify(structure.blocks, structure.page_height)
+    label_statement(structure)
     return structure

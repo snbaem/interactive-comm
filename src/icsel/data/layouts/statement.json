@@ -1,0 +1,17 @@
+{
+  "profile_version": 1,
+  "id": "statement",
+  "name": "Account statement",
+  "kind": "statement",
+  "description": "Title top right with the statement date and account details under it, address top left, and a full-width area for summary and transaction tables. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 324, "height": 54},
+    {"role": "subject", "x": 396, "y": 36, "width": 162, "height": 28, "max_lines": 2},
+    {"role": "date", "x": 396, "y": 108, "width": 162, "height": 14, "max_lines": 1},
+    {"role": "reference", "x": 396, "y": 124, "width": 162, "height": 54, "max_lines": 4},
+    {"role": "address", "x": 54, "y": 108, "width": 252, "height": 74, "max_lines": 6, "required": true},
+    {"role": "body", "x": 54, "y": 192, "width": 504, "height": 540},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}

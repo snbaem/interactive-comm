@@ -343,6 +343,76 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
     return out
 
 
+@dataclass
+class StatementSpec:
+    """Recipe for one synthetic account statement."""
+
+    id: str
+    rows: int
+    row_step: float
+    note: str
+
+
+STATEMENTS = [
+    StatementSpec("S01-statement", 22, 18.0, "Account statement with a one-page table."),
+    StatementSpec("S02-statement-2page", 60, 12.0, "Statement with tight rows over two pages."),
+]
+_STATEMENT_COLUMNS = (("Date", 54), ("Description", 130), ("Units", 380), ("Amount", 450),
+                      ("Balance", 520))  # fmt: skip
+
+
+def render_statement(spec: StatementSpec, out: Path) -> Path:
+    """Draw one synthetic account statement: title, details, summary boxes and a table."""
+    _, page_h = LETTER
+    c = canvas.Canvas(str(out), pagesize=LETTER, invariant=1)
+    c.setTitle(f"Synthetic statement {spec.id}")
+    c.setAuthor("icsel synthetic data (fictional)")
+
+    def text(x: float, top: float, value: str, font: str = FONT, size: float = 9) -> None:
+        c.setFont(font, size)
+        c.drawString(x, _baseline(page_h, top, size), value)
+
+    def footer() -> None:
+        text(54, 760, COMPANY_FOOTER, size=7)
+
+    def header(top: float) -> None:
+        for name, x in _STATEMENT_COLUMNS:
+            text(x, top, name, FONT_BOLD)
+
+    text(54, 38, COMPANY, FONT_BOLD, 16)
+    text(400, 40, "ACCOUNT STATEMENT", FONT_BOLD, 14)
+    details = ["Statement date: March 3, 2026", "Account: 0000-0001",
+               "Period: Feb 1 - Feb 28, 2026"]  # fmt: skip
+    for i, line in enumerate(details):
+        text(400, 110 + i * 13, line)
+    for i, line in enumerate(ADDRESSES["short"]):
+        text(54, 110 + i * 12, line)
+    summary = [("Opening balance", "120.00"), ("Payments", "-120.00"), ("Charges", "141.95"),
+               ("Amount due", "141.95")]  # fmt: skip
+    for i, (label, value) in enumerate(summary):
+        text(54 + i * 130, 194, label, FONT_BOLD)
+        text(54 + i * 130, 208, value)
+    top = 244.0
+    header(top)
+    for r in range(spec.rows):
+        top += spec.row_step
+        if top > 700:
+            footer()
+            c.showPage()
+            top = 72.0
+            header(top)
+            top += spec.row_step
+        cells = (f"Feb {r % 28 + 1:02d}", f"Water usage reading {r + 1}", str(10 + r),
+                 f"{3 + r * 0.4:.2f}", f"{30 + r * 5:.2f}")  # fmt: skip
+        for (_, x), value in zip(_STATEMENT_COLUMNS, cells, strict=True):
+            text(x, top, value)
+    text(54, top + 30, "Payment is due by March 25, 2026. Pay online or at any service counter.")
+    footer()
+    c.showPage()
+    c.save()
+    return out
+
+
 def generate(
     out_dir: Path,
     layouts: Path | None = None,
@@ -372,6 +442,10 @@ def generate(
                 "note": spec.note,
             }
         )
+    if letters is None and "statement" in by_id:
+        for st in STATEMENTS:
+            pdf = render_statement(st, out_dir / f"{st.id}.pdf")
+            manifest.append({"file": pdf.name, "expected_layout": "statement", "note": st.note})
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path

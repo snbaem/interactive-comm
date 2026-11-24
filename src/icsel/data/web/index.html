@@ -12,6 +12,7 @@
   --zone: #1d2330;
   --r-letterhead: #8b5cf6; --r-date: #0ea5e9; --r-address: #10b981; --r-subject: #f59e0b;
   --r-salutation: #ec4899; --r-body: #3b82f6; --r-closing: #6366f1; --r-footer: #64748b;
+  --r-reference: #14b8a6; --r-table: #a16207;
   --r-unknown: #ef4444;
 }
 @media (prefers-color-scheme: dark) {
@@ -219,7 +220,7 @@ footer { color: var(--muted); font-size: 12px; padding: 4px 20px 24px; }
 
 <script>
 "use strict";
-const ROLES = ["letterhead","date","address","subject","salutation","body","closing","footer","unknown"];
+const ROLES = ["letterhead","date","address","subject","salutation","body","closing","footer","reference","table","unknown"];
 const state = { info: null, runs: new Map(), run: null, srcPage: 0, smpPage: 0,
   showBlocks: true, showZones: true, hoverBlock: null, busy: false, srcSvg: null };
 

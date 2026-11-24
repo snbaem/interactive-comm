@@ -231,6 +231,12 @@ reports it and moves on to the next file.
 3. `render.py` draws the letter's text into the winning layout's zones with
    reportlab.
 
+**Statements.** A document with a bold or all-caps "... statement" title, no greeting and a
+table of four or more rows is treated as a statement. Its title becomes the subject,
+"Label: value" lines become the date and `reference` details, and table cells become
+`table`. A statement only fits layouts with `"kind": "statement"` (bundled: `statement`),
+and a letter only fits letter layouts, so neither is forced into the other's boxes.
+
 Layout profiles are JSON files, validated on load (schema: `src/icsel/data/layout-profile.schema.json`). Measurements are in points, from the top-left
 corner of the page. The bundled examples are in
 [`src/icsel/data/layouts/`](src/icsel/data/layouts/classic-left.json).

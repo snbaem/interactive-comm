@@ -44,6 +44,8 @@ ROLE_COLORS = {
     "body": "#455a64",
     "closing": "#8d6e63",
     "footer": "#757575",
+    "reference": "#00897b",
+    "table": "#8d6e63",
     "unknown": "#9e9e9e",
 }
 _DIM = colors.HexColor("#c2185b")

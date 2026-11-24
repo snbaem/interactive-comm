@@ -60,11 +60,12 @@ def structure_to_profile(letter: LetterStructure, profile_id: str, name: str = "
         name: Human-readable name; defaults to ``profile_id``.
     """
     zones = []
-    for role in ("letterhead", "date", "address", "subject", "body", "footer"):
+    for role in ("letterhead", "date", "address", "subject", "reference", "body", "footer"):
         region = letter.region(role)
         if region is None:
             continue
-        max_lines = region.line_count if role in ("date", "address", "subject") else None
+        fixed = ("date", "address", "subject", "reference")
+        max_lines = region.line_count if role in fixed else None
         zones.append(
             Zone(
                 role,
@@ -83,6 +84,7 @@ def structure_to_profile(letter: LetterStructure, profile_id: str, name: str = "
         letter.page_height,
         zones,
         description=f"Draft profile derived from {Path(letter.source).name}",
+        kind=letter.kind,
     )
 
 
