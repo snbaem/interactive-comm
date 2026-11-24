@@ -5,5 +5,7 @@
   "closeness_share": 0.6,
   "width_tolerance": 18.0,
   "low_fit_threshold": 0.8,
-  "tie_margin": 0.05
+  "tie_margin": 0.05,
+  "cluster_distance": 36.0,
+  "cluster_min_letters": 2
 }

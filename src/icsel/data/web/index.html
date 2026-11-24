@@ -373,7 +373,9 @@ function aiBox(run) {
   const errors = llm.errors || [];
   return h("div", { class: "ai-box" },
     h("div", { class: "ai-title" }, "Why this fit (AI)"),
-    llm.explanation ? h("div", {}, llm.explanation) : h("div", { class: "ai-meta" }, "No explanation returned."),
+    llm.explanation ? h("div", {}, llm.explanation) : h("div", { class: "ai-meta" }, !llm.explain_reasons || llm.explain_reasons.length
+        ? "No explanation returned."
+        : "Not needed: the letter fits one layout cleanly, so no explanation was requested."),
     changes.length ? h("div", { class: "ai-meta" },
       "AI labeled " + changes.length + " block" + (changes.length > 1 ? "s" : "") +
       " the rules could not: " + changes.map(c => c.from + " → " + c.to).join(", ") +

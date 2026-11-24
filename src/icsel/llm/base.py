@@ -29,6 +29,10 @@ class LLMAuthError(LLMError):
     """The provider has no usable credentials (missing, wrong or not permitted)."""
 
 
+class LLMCallLimit(LLMError):
+    """The run reached its cap on model calls (``--max-calls``)."""
+
+
 @runtime_checkable
 class CompletionBackend(Protocol):
     """Transport to one model provider."""

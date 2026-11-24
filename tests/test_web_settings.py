@@ -102,8 +102,11 @@ def test_turn_on_run_and_turn_off(client: Client) -> None:
     assert info["llm"]["tasks"] == ["explain"]  # letter text is opt-in
     _, info, _ = client.post("/api/settings", _on(label_blocks=True))
     assert info["llm"]["tasks"] == ["classify", "explain"]
-    _, run, _ = client.post("/api/runs?sample=L01-classic.pdf", b"")
+    # Only letters the rules flag are explained.
+    _, run, _ = client.post("/api/runs?sample=L14-no-layout-fits.pdf", b"")
     assert run["llm"]["explanation"] == "Because it fits."
+    _, run, _ = client.post("/api/runs?sample=L01-classic.pdf", b"")
+    assert run["llm"]["explanation"] is None and run["llm"]["explain_reasons"] == []
 
     _, info, _ = client.post("/api/settings", {"enabled": False})
     assert info["llm"]["enabled"] is False and _source(info) == "app"

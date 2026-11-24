@@ -95,7 +95,8 @@ placeholder like `[Date]`, a table. An optional AI step can:
 2. **explain the fit** in one short paragraph, based on the scores.
 
 It is off unless you turn it on, and it never changes what the rules already
-labeled. It only fills gaps: no second address, date or subject, and only above a
+labeled. The explanation is only requested when the rules flag a weak fit, a near-tie or
+no fit; it is shown after the rule-based text. It only fills gaps: no second address, date or subject, and only above a
 confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
 the result JSON and with an **AI** badge in the browser UI.
 
@@ -128,17 +129,82 @@ environment variables too (see [`.env.example`](.env.example)): `ICSEL_LLM_MODEL
 and `ICSEL_PROMPTS_DIR` to use your own prompt wording. The example backend has
 server-side refusal fallbacks on; set `ICSEL_LLM_FALLBACKS=0` on platforms without them.
 
-**What is sent:** only the text of blocks the rules could not label (up to 600
-characters each), plus positions, sizes and rule-based roles of the other blocks.
-The explanation is built from scores alone and sends no letter text.
-**Only enable the AI step for letters you are allowed to send to the model
-endpoint you configure.** `ICSEL_LLM_TASKS=explain` sends no letter text at all.
-See [`src/icsel/prompts/`](src/icsel/prompts/README.md) for the prompt templates.
+### Tasks and what each one sends
+
+Pick tasks with `--ai-tasks` or `ICSEL_LLM_TASKS` (default `classify,explain`).
+
+| Task | What it does | What is sent | Opt-in switch |
+| --- | --- | --- | --- |
+| `classify` | Label blocks the rules left `unknown` | Text of those blocks (up to 600 characters each); positions, sizes and roles of the others | `--llm` |
+| `explain` | Explain weak fits, near-ties and no-fits | Scores and offsets. **No letter text** | `--llm` |
+| `propose` | Name proposed layouts (portfolio) | Box geometry and layout ids. **No letter text**, no file names | `--ai-tasks` |
+| `fields` | Find variable fields | **Letter text**: everything except letterhead and footer, so names, addresses and amounts (up to 12,000 characters) | `--ai-tasks` **and** `--fields-send-text` |
+| `purpose` | Tag the letter's purpose | **Letter text**: subject line and first body paragraph (up to 800 characters) | `--ai-tasks` **and** `--purpose-send-text` |
+
+The text switches can also be set with `ICSEL_LLM_FIELDS_SEND_TEXT=1` and
+`ICSEL_LLM_PURPOSE_SEND_TEXT=1`. **Only enable the AI step for letters you are allowed to
+send to the model endpoint you configure.** `ICSEL_LLM_TASKS=explain` sends no letter text
+at all. See [`src/icsel/prompts/`](src/icsel/prompts/README.md) for the prompt templates.
+`icsel serve` supports `classify` and `explain` only.
+
+Model output is never trusted: every reply is checked against its schema, quoted text must
+be an exact substring of the letter, names and purposes must match a pattern or list.
+Whatever fails is dropped and counted in the report. Everything kept is flagged as AI.
+
+**Cost control.** `--max-calls N` is a hard cap on model calls. Replies that passed
+validation are cached in `out/.ai-cache` (`ICSEL_AI_CACHE_DIR` moves it, `--no-ai-cache`
+turns it off), keyed by task, prompt, model and input; failures are never cached. Cached
+`fields` replies quote letter text, so treat the folder like the letters themselves.
+
+### Field detection
+
+```bash
+icsel match letter.pdf --llm anthropic --ai-tasks fields --fields-send-text
+icsel portfolio letters --llm anthropic --ai-tasks fields --fields-send-text --yes
+```
+
+> **This sends letter text to the model endpoint**, including names, addresses, account
+> numbers and amounts. Use it only for letters you are allowed to send there.
+
+The model marks spans as fixed or variable and suggests a camelCase name for each variable
+one. The result JSON gets a `fields` section; portfolio mode writes `fields.csv` (`letter`,
+`field`, `text`, `confidence`, `probably_fixed`, `source`) and lists names that recur across
+letters. A text that appears identically in two or more letters is marked probably fixed.
+A date that a batch happens to share is marked too, so treat the mark as a hint.
+
+`UNVERIFIED`: how these fields would map to Interactive Communications data binding, a form
+data model (FDM) or document fragments has not been checked against Adobe documentation.
+icsel only suggests names; it creates nothing in AEM. To verify: compare the list with the
+data model and fragments of a real template in your own environment.
+
+### Purpose tagging
+
+`--ai-tasks purpose --purpose-send-text` tags each letter with one value of
+[`purposes.json`](src/icsel/data/purposes.json); `--purposes FILE` uses your own list
+(`{"purposes": ["billing-notice", ...]}`). Anything else the model says becomes `other` and
+is counted. Portfolio mode fills the `purpose` column and adds a purpose-by-layout table.
+
+## Benchmark (`icsel eval`)
+
+```bash
+icsel samples
+icsel eval samples/letters                 # rules only, offline
+icsel eval samples/letters --llm anthropic --ai-tasks classify,fields,purpose \
+  --fields-send-text --purpose-send-text
+```
+
+The synthetic letters come with `truth.json`: the true role of every block, the variable
+fields, the purpose and the layout. `icsel eval` scores the rules alone, then the rules plus
+each task, and writes `eval.json` and `eval.md`. The report says plainly when a task **does
+not beat the rules**. Tokens appear when the backend reports them, a cost only when it also
+gives prices. `explain` and `propose` have no metric here. The benchmark letters are
+synthetic and small; a good score on them says little about your letters.
 
 **Other providers:** the AI step is written against a one-method interface
 (`CompletionBackend.complete(system, prompt, json_schema)` in
 [`icsel/llm/base.py`](src/icsel/llm/base.py)). To add a provider, implement it and
-call `icsel.llm.register_backend("name", factory, api_key_env="NAME_API_KEY")`. Prompts, data minimization and
+call `icsel.llm.register_backend("name", factory, api_key_env="NAME_API_KEY")`. A backend may expose `last_usage`
+(token name to count) and `prices` (per million tokens) for reports. Prompts, data minimization and
 guard rails are shared. Tests use a fake backend and never touch the network.
 
 ## Portfolio mode
@@ -173,6 +239,7 @@ It writes `portfolio.csv` (one row per PDF, for sorting and filtering) and `port
 - **Ambiguous**: letters where two or more fitting layouts score within
   `--ambiguity-margin` (default 0.05) of the best one.
 - **Near-duplicate letters**, grouped: candidates for shared content.
+- **Proposed layouts**, with `--proposals` (see below).
 - **Unreadable or no text**: corrupt files and scans are listed, and the run goes on.
 
 **Near-ties.** When fitting layouts are within the margin, the score's last decimal
@@ -188,12 +255,20 @@ so account numbers and amounts do not hide a copy. Pairs at or above
 pairwise, which is comfortable for a few thousand letters. Bodies shorter than 12 words
 are skipped.
 
+**Proposed layouts.** `--proposals` clusters the weak and no-fit letters: two letters
+belong together when none of their address, subject and date boxes starts more than
+`cluster_distance` points apart (default 36, see `scoring.json`). Each cluster of at least
+`cluster_min_letters` (default 2) becomes a draft profile in `proposals/`, with median box
+positions and sizes and a dimensioned view, next to the nearest existing layout. No model is
+involved. The `propose` AI task adds a name and a rationale. Drafts are a starting point:
+review them, then use them with `--layouts`.
+
 **Memory and size.** Each PDF is read and reduced to one small record, so a folder of
 hundreds of PDFs does not need to fit in memory. Every score comes from the rule-based
 matcher unless you turn the AI step on.
 
 **AI step.** Add `--llm BACKEND` (see [Optional AI step](#optional-ai-step-off-by-default)).
-Portfolio mode only asks the model about letters that need it: letters with blocks the
+With the default tasks, portfolio mode only asks the model about letters that need it: letters with blocks the
 rules could not label, and letters that are ambiguous, weak or fit no layout. A letter
 that fits one layout cleanly makes no call. icsel prints the estimate first, for example
 `up to 10 model call(s) for 40 letter(s)`, and asks before sending anything. Pass `--yes`
@@ -208,9 +283,10 @@ reports are still written.
 
 | Command | What it does |
 | --- | --- |
-| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--config FILE` (scoring settings, defaults in `src/icsel/data/scoring.json`), `--dimensions`, `--units`, `--out DIR`, `-r/--recursive`, `--llm BACKEND`. |
+| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--config FILE` (scoring settings, defaults in `src/icsel/data/scoring.json`), `--dimensions`, `--units`, `--out DIR`, `-r/--recursive`, `--llm BACKEND` and the AI options of `portfolio`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
-| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--config`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--llm BACKEND`, `--yes`. |
+| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--config`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--proposals`, `--llm BACKEND`, `--ai-tasks`, `--max-calls N`, `--fields-send-text`, `--purpose-send-text`, `--purposes FILE`, `--no-ai-cache`, `--yes`. |
+| `icsel eval PATH...` | Benchmark the rules, and the rules plus each AI task, against `truth.json`; writes `eval.json` and `eval.md`. Options: `--truth FILE`, `--out DIR` (default `out/eval`), `--layouts`, `--config`, `-r/--recursive`, `--yes` and the AI options of `portfolio`. |
 | `icsel show-layout LAYOUT` | Draw a layout with distances from the top and left edges, page margins, gaps between zones, sizes and line capacities. `--units in\|cm\|pt`, `--format pdf\|png\|both`, `--compare OTHER` (side by side), `--diff` (overlay `--compare` or `--letter PDF` and list differences), `--json`. `match --dimensions` does the same for each letter's best layout. |
 | `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`, `--llm`). |
 | `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). With `--portfolio`, generate the 40-file demo folder for `icsel portfolio` instead (default `samples/portfolio`). |

@@ -274,12 +274,13 @@ def test_handles_more_than_a_hundred_pdfs(
     letters_dir: Path, tmp_path: Path, layouts: list[LayoutProfile]
 ) -> None:
     sources = sorted(letters_dir.glob("*.pdf"))
-    for n in range(20):
+    for n in range(8):
         for src in sources:
             shutil.copy(src, tmp_path / f"c{n:02d}-{src.name}")
     seen: list[tuple[int, int]] = []
     recs = scan(sorted(tmp_path.glob("*.pdf")), layouts, progress=lambda i, t: seen.append((i, t)))
-    total = len(sources) * 20
+    total = len(sources) * 8
+    assert total > 100
     assert len(recs) == total and all(r.status == "ok" for r in recs)
     assert seen[-1] == (total, total)
     groups = find_duplicate_groups(recs)
@@ -363,6 +364,7 @@ def test_cli_asks_before_calling_and_needs_yes_when_not_interactive(
     assert 2 <= len(backend.calls) <= 10
     report = (tmp_path / "yes" / "portfolio.md").read_text(encoding="utf-8")
     assert "## AI step" in report and "Why (AI): Short explanation." in report
+    assert report.index("- Why (rules): ") < report.index("- Why (AI): ")
     assert "AI labeled block" in report
 
 

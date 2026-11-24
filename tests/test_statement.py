@@ -147,6 +147,24 @@ def test_statement_renders_in_a_letter_layout_too(
 
 
 # ------------------------------------------------------------------ profile and AI
+def test_proposals_never_mix_letters_and_statements() -> None:
+    from icsel.portfolio import LetterRecord
+    from icsel.proposals import cluster, draft_profile, read_geometry
+
+    letter, statement = _structure(title="ACCOUNT SUMMARY"), _structure()
+    assert label_statement(statement)
+    for s in (letter, statement):
+        s.blocks = [b for b in s.blocks if b.role != "reference"]
+    letter.blocks = [Block(**vars(b)) for b in statement.blocks]
+    items = [
+        read_geometry(LetterRecord(Path(n), n), s)
+        for n, s in (("a", letter), ("b", statement), ("c", statement))
+    ]
+    groups = cluster(items, 36.0)
+    assert [[g.record.name for g in c] for c in groups] == [["a"], ["b", "c"]]
+    assert draft_profile(groups[1], "proposed-1").kind == "statement"
+
+
 def test_kind_is_validated_and_kept(layouts: list[LayoutProfile]) -> None:
     layout = next(lay for lay in layouts if lay.id == "statement")
     assert profile_from_dict(json.loads(json.dumps(layout.to_dict()))).kind == "statement"

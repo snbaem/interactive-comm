@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.utils import simpleSplit
@@ -361,6 +363,18 @@ _STATEMENT_COLUMNS = (("Date", 54), ("Description", 130), ("Units", 380), ("Amou
                       ("Balance", 520))  # fmt: skip
 
 
+_STATEMENT_DETAILS = ["Statement date: March 3, 2026", "Account: 0000-0001",
+                      "Period: Feb 1 - Feb 28, 2026"]  # fmt: skip
+_STATEMENT_SUMMARY = [("Opening balance", "120.00"), ("Payments", "-120.00"),
+                      ("Charges", "141.95"), ("Amount due", "141.95")]  # fmt: skip
+_STATEMENT_NOTE = "Payment is due by March 25, 2026. Pay online or at any service counter."
+
+
+def _statement_row(r: int) -> list[str]:
+    return [f"Feb {r % 28 + 1:02d}", f"Water usage reading {r + 1}", str(10 + r),
+            f"{3 + r * 0.4:.2f}", f"{30 + r * 5:.2f}"]  # fmt: skip
+
+
 def render_statement(spec: StatementSpec, out: Path) -> Path:
     """Draw one synthetic account statement: title, details, summary boxes and a table."""
     _, page_h = LETTER
@@ -381,15 +395,11 @@ def render_statement(spec: StatementSpec, out: Path) -> Path:
 
     text(54, 38, COMPANY, FONT_BOLD, 16)
     text(400, 40, "ACCOUNT STATEMENT", FONT_BOLD, 14)
-    details = ["Statement date: March 3, 2026", "Account: 0000-0001",
-               "Period: Feb 1 - Feb 28, 2026"]  # fmt: skip
-    for i, line in enumerate(details):
+    for i, line in enumerate(_STATEMENT_DETAILS):
         text(400, 110 + i * 13, line)
     for i, line in enumerate(ADDRESSES["short"]):
         text(54, 110 + i * 12, line)
-    summary = [("Opening balance", "120.00"), ("Payments", "-120.00"), ("Charges", "141.95"),
-               ("Amount due", "141.95")]  # fmt: skip
-    for i, (label, value) in enumerate(summary):
+    for i, (label, value) in enumerate(_STATEMENT_SUMMARY):
         text(54 + i * 130, 194, label, FONT_BOLD)
         text(54 + i * 130, 208, value)
     top = 244.0
@@ -402,15 +412,144 @@ def render_statement(spec: StatementSpec, out: Path) -> Path:
             top = 72.0
             header(top)
             top += spec.row_step
-        cells = (f"Feb {r % 28 + 1:02d}", f"Water usage reading {r + 1}", str(10 + r),
-                 f"{3 + r * 0.4:.2f}", f"{30 + r * 5:.2f}")  # fmt: skip
-        for (_, x), value in zip(_STATEMENT_COLUMNS, cells, strict=True):
+        for (_, x), value in zip(_STATEMENT_COLUMNS, _statement_row(r), strict=True):
             text(x, top, value)
-    text(54, top + 30, "Payment is due by March 25, 2026. Pay online or at any service counter.")
+    text(54, top + 30, _STATEMENT_NOTE)
     footer()
     c.showPage()
     c.save()
     return out
+
+
+# ---------------------------------------------------------------- ground truth
+#: True purpose of every synthetic subject line (see ``data/purposes.json`` for the list).
+_PURPOSES = {
+    "Your updated tariff from April 2026": "policy-update",
+    "Meter reading review for account 0000-0002": "billing-notice",
+    "Meter review": "billing-notice",
+    "Change to your payment plan and the schedule for the remaining instalments this year": (
+        "billing-notice"
+    ),
+    "Change to your payment plan": "billing-notice",
+    "Notice of a change to the billing period and payment dates for account 0000-0008": (
+        "billing-notice"
+    ),
+    "Budget plan review": "billing-notice",
+    "Statement of account": "statement",
+    "Statement for your business account": "statement",
+    "Statement for your business account (corrected)": "statement",
+    "Annual summary of your service": "statement",
+    "Summary of charges this quarter": "statement",
+    "Your usage summary for the last quarter": "statement",
+    "Confirmation of your direct debit": "confirmation",
+    "Confirmation of your new billing date": "confirmation",
+    "Confirmation of your new service address": "confirmation",
+    "Confirmation of your service address": "confirmation",
+    "Direct debit change confirmed": "confirmation",
+    "Your water meter has been replaced": "confirmation",
+    "Your complete service terms": "policy-update",
+}
+
+_ACCOUNT_RE = re.compile(r"\b0000-\d{4}(?:-[A-Z])?\b")
+_MONTH_RE = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|October|November"
+    r"|December) \d{4}\b"
+)
+
+
+def _true_fields(
+    date: str | None, address: list[str], subject: str, table: list[list[str]] | None
+) -> list[dict[str, str]]:
+    """The variable text of a synthetic letter, each text once, with unique names."""
+    pairs: list[tuple[str, str]] = []
+    if date:
+        pairs.append(("letterDate", date))
+    for i, line in enumerate(address):
+        pairs.append(("recipientName" if i == 0 else f"addressLine{i}", line))
+    for text in (*address, subject):
+        for number in _ACCOUNT_RE.findall(text):
+            pairs.append(("accountNumber", number))
+    for month in _MONTH_RE.findall(subject):
+        pairs.append(("effectiveMonth", month))
+    if table:
+        # The first column holds fixed row labels; the rest is data.
+        for row in table[1:]:
+            pairs.extend((h.lower(), cell) for h, cell in list(zip(table[0], row, strict=True))[1:])
+    out: list[dict[str, str]] = []
+    used: set[str] = set()
+    texts: set[str] = set()
+    for name, text in pairs:
+        if text in texts:
+            continue
+        texts.add(text)
+        unique, n = name, 2
+        while unique in used:
+            unique, n = f"{name}{n}", n + 1
+        used.add(unique)
+        out.append({"name": unique, "text": text})
+    return out
+
+
+def letter_truth(spec: LetterSpec, layout: LayoutProfile) -> dict[str, Any]:
+    """Ground truth of one synthetic letter: block roles, fields, purpose and layout.
+
+    The recorded layout is ``None`` for a letter that is meant to fit no layout.
+    """
+    subject_zone, body = _zone(layout, "subject", spec), _zone(layout, "body", spec)
+    font = FONT_BOLD if spec.subject_bold else FONT
+    subject = simpleSplit(f"{spec.subject_prefix}{spec.subject}", font, SIZE, subject_zone.width)
+    blocks: list[dict[str, Any]] = [
+        {"role": "letterhead", "lines": [spec.company, spec.tagline]},
+        {"role": "address", "lines": list(spec.address)},
+        {"role": "subject", "lines": subject},
+        {"role": "salutation", "lines": [spec.salutation]},
+    ]
+    if spec.date:
+        blocks.append({"role": "date", "lines": [spec.date]})
+    if spec.table:
+        blocks.append({"role": "body", "lines": [cell for row in spec.table for cell in row]})
+    paragraphs = spec.body if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
+    for text in paragraphs:
+        blocks.append({"role": "body", "lines": simpleSplit(text, FONT, SIZE, body.width)})
+    blocks.append({"role": "closing", "lines": [spec.closing, *spec.signer]})
+    blocks.append({"role": "footer", "lines": [spec.footer]})
+    return {
+        "file": f"{spec.id}.pdf",
+        "layout": None if spec.fits_none else spec.layout,
+        "purpose": _PURPOSES.get(spec.subject, "other"),
+        "blocks": blocks,
+        "fields": _true_fields(spec.date, spec.address, spec.subject, spec.table),
+    }
+
+
+def statement_truth(spec: StatementSpec) -> dict[str, Any]:
+    """Ground truth of a synthetic statement. Fields are left out: every cell is data."""
+    cells = [name for name, _ in _STATEMENT_COLUMNS]
+    cells += [text for pair in _STATEMENT_SUMMARY for text in pair]
+    for r in range(spec.rows):
+        cells += _statement_row(r)
+    return {
+        "file": f"{spec.id}.pdf",
+        "layout": "statement",
+        "purpose": "statement",
+        "blocks": [
+            {"role": "letterhead", "lines": [COMPANY]},
+            {"role": "subject", "lines": ["ACCOUNT STATEMENT"]},
+            {"role": "date", "lines": _STATEMENT_DETAILS[:1]},
+            {"role": "reference", "lines": _STATEMENT_DETAILS[1:]},
+            {"role": "address", "lines": list(ADDRESSES["short"])},
+            {"role": "table", "lines": cells},
+            {"role": "body", "lines": [_STATEMENT_NOTE]},
+            {"role": "footer", "lines": [COMPANY_FOOTER]},
+        ],
+    }
+
+
+def _write_truth(out_dir: Path, letters: list[dict[str, Any]]) -> Path:
+    path = out_dir / "truth.json"
+    doc = {"version": 1, "letters": letters}
+    path.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
+    return path
 
 
 def generate(
@@ -418,7 +557,7 @@ def generate(
     layouts: Path | None = None,
     letters: list[LetterSpec] | None = None,
 ) -> Path:
-    """Render the synthetic letters into ``out_dir`` and write ``manifest.json``.
+    """Render the synthetic letters into ``out_dir``; write ``manifest.json`` and ``truth.json``.
 
     Args:
         out_dir: Folder for the letter PDFs and the manifest (created if needed).
@@ -433,7 +572,9 @@ def generate(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = []
+    truth = []
     for spec in letters or LETTERS:
+        truth.append(letter_truth(spec, by_id[spec.layout]))
         pdf = render_letter(spec, by_id[spec.layout], out_dir / f"{spec.id}.pdf")
         manifest.append(
             {
@@ -446,6 +587,8 @@ def generate(
         for st in STATEMENTS:
             pdf = render_statement(st, out_dir / f"{st.id}.pdf")
             manifest.append({"file": pdf.name, "expected_layout": "statement", "note": st.note})
+            truth.append(statement_truth(st))
+    _write_truth(out_dir, truth)
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path
@@ -602,6 +745,37 @@ def _portfolio_specs() -> list[tuple[LetterSpec, dict[str, str]]]:
     return out
 
 
+def _notice_truth(
+    name: str, heading: str, amount: str, sentences: tuple[str, str]
+) -> dict[str, Any]:
+    """Ground truth of a notice. It was built from no layout, so ``layout`` is left out."""
+    table = [["Account", "Due date", "Amount"], ["0000-0001", "October 15, 2026", amount]]
+    return {
+        "file": f"{name}.pdf",
+        "purpose": "reminder",
+        "blocks": [
+            {"role": "subject", "lines": [heading]},
+            {"role": "date", "lines": ["[Date]"]},
+            {
+                "role": "address",
+                "lines": ["Alex Sample", "42 Placeholder Lane", "Riverton ZZ 00001"],
+            },
+            {"role": "body", "lines": [cell for row in table for cell in row]},
+            {"role": "salutation", "lines": ["Dear Alex Sample,"]},
+            {"role": "body", "lines": list(sentences)},
+        ],
+        "fields": [
+            {"name": "letterDate", "text": "[Date]"},
+            {"name": "recipientName", "text": "Alex Sample"},
+            {"name": "addressLine1", "text": "42 Placeholder Lane"},
+            {"name": "addressLine2", "text": "Riverton ZZ 00001"},
+            {"name": "accountNumber", "text": "0000-0001"},
+            {"name": "dueDate", "text": "October 15, 2026"},
+            {"name": "amount", "text": amount},
+        ],
+    }
+
+
 def _render_notice(path: Path, heading: str, amount: str, sentences: tuple[str, str]) -> None:
     """A collection-notice shaped letter: a table the rules cannot label, no layout planted."""
     c = canvas.Canvas(str(path), pagesize=LETTER, invariant=1)
@@ -666,7 +840,10 @@ def generate_portfolio(out_dir: Path, layouts: Path | None = None) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, str]] = []
+    truth: list[dict[str, Any]] = []
     for spec, facts in _portfolio_specs():
+        entry = letter_truth(spec, by_id[spec.layout])
+        truth.append({**entry, "layout": facts.get("expected_layout")})
         pdf = render_letter(spec, by_id[spec.layout], out_dir / f"{spec.id}.pdf")
         manifest.append({"file": pdf.name, **facts, "note": spec.note})
     notices = [
@@ -691,6 +868,7 @@ def generate_portfolio(out_dir: Path, layouts: Path | None = None) -> Path:
     ]
     for name, heading, amount, sentences in notices:
         _render_notice(out_dir / f"{name}.pdf", heading, amount, sentences)
+        truth.append(_notice_truth(name, heading, amount, sentences))
         manifest.append(
             {"file": f"{name}.pdf", "kind": "notice_table", "note": "Table cells stay unknown."}
         )
@@ -700,6 +878,7 @@ def generate_portfolio(out_dir: Path, layouts: Path | None = None) -> Path:
     )
     (out_dir / "Z02-corrupt.pdf").write_bytes(b"%PDF-1.4\nthis is not a real pdf\n")
     manifest.append({"file": "Z02-corrupt.pdf", "kind": "corrupt", "note": "Not a readable PDF."})
+    _write_truth(out_dir, truth)
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path

@@ -34,6 +34,10 @@ class ScoringConfig:
         width_tolerance: Points a block may exceed its zone's width before it fails.
         low_fit_threshold: A best score below this is called a weak fit.
         tie_margin: Fitting layouts within this score of the best count as a near-tie.
+        cluster_distance: Layout proposals: two letters belong together when none of their
+            address, subject and date boxes starts farther apart than this (points). The
+            default, 36 pt (half an inch), is half of ``position_scale``.
+        cluster_min_letters: Layout proposals: smallest cluster that becomes a proposal.
     """
 
     role_weights: dict[str, float] = field(
@@ -50,6 +54,8 @@ class ScoringConfig:
     width_tolerance: float = 18.0
     low_fit_threshold: float = 0.8
     tie_margin: float = 0.05
+    cluster_distance: float = 36.0
+    cluster_min_letters: float = 2
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view, in the same shape as the config file."""
@@ -60,6 +66,8 @@ class ScoringConfig:
             "width_tolerance": self.width_tolerance,
             "low_fit_threshold": self.low_fit_threshold,
             "tie_margin": self.tie_margin,
+            "cluster_distance": self.cluster_distance,
+            "cluster_min_letters": self.cluster_min_letters,
         }
 
 
@@ -70,6 +78,8 @@ _NUMBER_RULES: dict[str, tuple[float, float, str]] = {
     "width_tolerance": (0.0, 500.0, "a distance in points, 0 to 500"),
     "low_fit_threshold": (0.0, 1.0, "a score between 0 and 1"),
     "tie_margin": (0.0, 1.0, "a score difference between 0 and 1"),
+    "cluster_distance": (0.0, 2000.0, "a distance in points, 0 to 2000"),
+    "cluster_min_letters": (1.0, 10000.0, "a number of letters, 1 or more"),
 }
 
 
