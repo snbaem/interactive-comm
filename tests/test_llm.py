@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from icsel.config import ScoringConfig
+from icsel.explain import explanation_reasons
 from icsel.extract import Block, LetterStructure, extract
 from icsel.llm import (
     LLMAssistant,
@@ -20,6 +22,7 @@ from icsel.llm import (
 )
 from icsel.llm.anthropic_backend import FALLBACK_BETA, AnthropicBackend
 from icsel.llm.prompts import render_prompt
+from icsel.match import rank
 from icsel.pipeline import analyze
 from icsel.profile import LayoutProfile
 from icsel.synthetic import ADDRESSES, LetterSpec, render_letter
@@ -171,7 +174,8 @@ def test_explanation_sends_no_letter_text(layouts: list[LayoutProfile]) -> None:
 # ------------------------------------------------------------------ failure handling
 def test_bad_reply_does_not_break_matching(layouts: list[LayoutProfile]) -> None:
     backend = FakeBackend(["not json", "Still explained."])
-    analysis = analyze(_letter(), layouts, LLMAssistant(backend))
+    flagged = ScoringConfig(tie_margin=1.0)  # a near-tie, so the explanation is wanted
+    analysis = analyze(_letter(), layouts, LLMAssistant(backend), flagged)
     assert analysis.results  # ranking still produced
     assert analysis.llm["role_changes"] == []
     assert "not the expected JSON" in analysis.llm["errors"][0]
@@ -241,9 +245,16 @@ def test_cli_match_with_fake_backend(
     register_backend(
         "fake-cli", lambda env: FakeBackend([_suggestions((idx, "subject", 0.9)), "Why."])
     )
-    assert main(["match", str(pdf), "--out", str(tmp_path / "out"), "--llm", "fake-cli"]) == 0
+    argv = ["match", str(pdf), "--out", str(tmp_path / "out"), "--llm", "fake-cli"]
+    assert main(argv) == 0
     out = capsys.readouterr().out
-    assert "AI step ON" in out and "-> subject" in out and "Why (AI): Why." in out
+    assert "AI step ON" in out and "-> subject" in out
+    assert "Why (AI)" not in out  # a clean fit: the rule text is enough
+    strict = tmp_path / "strict.json"
+    strict.write_text('{"low_fit_threshold": 1.0}', encoding="utf-8")
+    assert main([*argv, "--no-ai-cache", "--config", str(strict)]) == 0
+    out = capsys.readouterr().out
+    assert out.index("weak fit") < out.index("Why (AI): Why.")  # AI text follows the rule text
     result = json.loads((tmp_path / "out" / "no-prefix.result.json").read_text(encoding="utf-8"))
     assert result["llm"]["enabled"] and result["llm"]["role_changes"][0]["to"] == "subject"
     blocks = result["letter"]["blocks"]
@@ -262,6 +273,39 @@ def test_cli_without_llm_records_it_off(tmp_path: Path, letters_dir: Path) -> No
         "role_changes": [],
         "explanation": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("name", "reasons"),
+    [
+        ("L01-classic", []),
+        ("L14-no-layout-fits", ["no fit"]),
+    ],
+)
+def test_explain_is_only_called_for_flagged_letters(
+    letters_dir: Path, layouts: list[LayoutProfile], name: str, reasons: list[str]
+) -> None:
+    backend = FakeBackend(["Because."])
+    assistant = LLMAssistant(backend, tasks=("explain",))
+    analysis = analyze(extract(letters_dir / f"{name}.pdf"), layouts, assistant)
+    assert analysis.llm["explain_reasons"] == reasons
+    assert len(backend.calls) == len(reasons)
+    assert analysis.llm["explanation"] == ("Because." if reasons else None)
+
+
+def test_explanation_reasons_for_weak_fits_and_near_ties(
+    letters_dir: Path, layouts: list[LayoutProfile]
+) -> None:
+    letter = extract(letters_dir / "L01-classic.pdf")
+    results = rank(letter, layouts)
+
+    def reasons(**kw: float) -> list[str]:
+        return explanation_reasons(letter, layouts, results, ScoringConfig(**kw))
+
+    assert reasons() == []
+    assert reasons(low_fit_threshold=1.0) == ["weak fit"]
+    assert reasons(tie_margin=1.0) == ["near-tie"]
+    assert reasons(low_fit_threshold=1.0, tie_margin=1.0) == ["weak fit", "near-tie"]
 
 
 # ------------------------------------------------------------------ Anthropic adapter, offline

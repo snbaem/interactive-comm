@@ -41,8 +41,9 @@ from typing import Any
 
 from .config import ScoringConfig
 from .dimensions import letter_vs_layout
+from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, NoTextError, extract
-from .llm import Assistant, LLMError, apply_suggestions, fit_facts
+from .llm import Assistant, LLMCallLimit, LLMError, apply_suggestions, fit_facts
 from .match import CAPACITY_ROLES, LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
 from .profile import LayoutProfile
 
@@ -84,7 +85,11 @@ CSV_COLUMNS = [
     "duplicate_group",
     "ai_role_changes",
     "note",
+    "purpose",
 ]
+
+
+FIELD_COLUMNS = ["letter", "field", "text", "confidence", "probably_fixed", "source"]
 
 
 @dataclass
@@ -110,7 +115,13 @@ class LetterRecord:
     duplicate_group: str = ""
     ai_changes: list[dict[str, Any]] = field(default_factory=list)
     ai_explanation: str | None = None
+    #: Rule-based explanation, kept only for letters the AI step explains too.
+    rule_explanation: str = ""
     ai_error: str = ""
+    #: Variable fields found by the AI step (plain data, see :class:`icsel.llm.FieldSpan`).
+    ai_fields: list[dict[str, Any]] = field(default_factory=list)
+    #: Purpose chosen by the AI step; empty when the task did not run.
+    ai_purpose: str = ""
     #: Where the letter's boxes sit against the chosen (or closest) layout, in inches.
     offsets: str = ""
 
@@ -302,11 +313,23 @@ class AiPlan:
 
     classify: list[LetterRecord]
     explain: list[LetterRecord]
+    fields: list[LetterRecord] = field(default_factory=list)
+    purpose: list[LetterRecord] = field(default_factory=list)
+    #: Number of proposed layouts to name (one call each).
+    proposals: int = 0
 
     @property
     def calls(self) -> int:
-        """Upper bound on model calls: one per labeling job plus one per explanation job."""
-        return len(self.classify) + len(self.explain)
+        """Upper bound on model calls: one per letter and job, one per proposed layout."""
+        return sum(len(job) for job in self.jobs()) + self.proposals
+
+    def jobs(self) -> list[list[LetterRecord]]:
+        """The letters of every per-letter job, in the order the jobs run."""
+        return [self.classify, self.fields, self.purpose, self.explain]
+
+    def letters(self) -> list[LetterRecord]:
+        """Every letter with at least one job, once."""
+        return list({id(r): r for job in self.jobs() for r in job}.values())
 
 
 def plan_ai(records: Iterable[LetterRecord], assistant: Assistant) -> AiPlan:
@@ -314,15 +337,18 @@ def plan_ai(records: Iterable[LetterRecord], assistant: Assistant) -> AiPlan:
 
     * **Labeling** only for letters with at least one block the rules left ``unknown``.
     * **Explaining** only for letters that are ambiguous, weak or fit no layout.
+    * **Detecting fields** and **tagging the purpose** (opt-in) for every matched letter.
 
-    Letters that fit one layout cleanly make no model call at all. The explain count is
-    an upper bound, because labeling can resolve a weak fit before it is explained.
+    With the default tasks, letters that fit one layout cleanly make no call at all. The
+    explain count is an upper bound, because labeling can resolve a weak fit before it is explained.
     """
     tasks = set(getattr(assistant, "tasks", ()))
     ok = [r for r in records if r.status == STATUS_OK]
     classify = [r for r in ok if "classify" in tasks and r.unknown_blocks > 0]
     explain = [r for r in ok if "explain" in tasks and (r.ambiguous or r.fit != FIT_GOOD)]
-    return AiPlan(classify, explain)
+    fields = ok if "fields" in tasks else []
+    purpose = ok if "purpose" in tasks else []
+    return AiPlan(classify, explain, list(fields), list(purpose))
 
 
 def run_ai(
@@ -345,12 +371,10 @@ def run_ai(
     settings = settings or Settings()
     classify_ids = {id(r) for r in plan.classify}
     explain_ids = {id(r) for r in plan.explain}
-    ordered: list[LetterRecord] = []
-    seen: set[int] = set()
-    for r in [*plan.classify, *plan.explain]:
-        if id(r) not in seen:
-            seen.add(id(r))
-            ordered.append(r)
+    field_ids = {id(r) for r in plan.fields}
+    purpose_ids = {id(r) for r in plan.purpose}
+    ordered = plan.letters()
+    ai: Any = assistant  # only tasks in the plan are run, so their methods exist
     failures_in_a_row = 0
     for i, record in enumerate(ordered, start=1):
         if progress:
@@ -367,15 +391,25 @@ def run_ai(
                 changes = apply_suggestions(letter, suggestions, assistant.min_confidence)
                 record.ai_changes = [c.to_dict() for c in changes]
             tb = assess(record, letter, layouts, settings) if changes else None
+            if id(record) in field_ids:
+                spans = ai.detect_fields(letter)
+                record.ai_fields = [f.to_dict() for f in spans if f.kind == "variable"]
+            if id(record) in purpose_ids:
+                record.ai_purpose = ai.tag_purpose(letter)
             if id(record) in explain_ids and (record.ambiguous or record.fit != FIT_GOOD):
                 if tb is None:
                     tb = resolve_ties(
                         letter, layouts, rank(letter, layouts, settings.scoring), settings.margin
                     )
+                record.rule_explanation = explain_ranking(
+                    letter, layouts, tb.results, settings.scoring
+                )
                 record.ai_explanation = assistant.explain_fit(
                     fit_facts(letter, tb.results, changes)
                 )
             failures_in_a_row = 0
+        except LLMCallLimit as exc:
+            return f"AI step stopped: {exc}. The rest of the report is rule-based."
         except LLMError as exc:
             record.ai_error = str(exc)
             failures_in_a_row += 1
@@ -420,9 +454,65 @@ def write_csv(records: Iterable[LetterRecord], path: Path) -> Path:
                 "duplicate_group": r.duplicate_group,
                 "ai_role_changes": len(r.ai_changes) if r.ai_changes else "",
                 "note": r.note,
+                "purpose": r.ai_purpose,
             }
             writer.writerow({k: _csv_safe(v) for k, v in row.items()})
     return path
+
+
+def fixed_texts(records: Iterable[LetterRecord]) -> set[str]:
+    """Field texts that appear identically in two or more letters: probably fixed wording."""
+    seen = Counter(t for r in records for t in {f["text"] for f in r.ai_fields})
+    return {text for text, n in seen.items() if n > 1}
+
+
+def write_fields_csv(records: Sequence[LetterRecord], path: Path) -> Path:
+    """Write one row per variable field found by the AI step (UTF-8 with BOM)."""
+    fixed = fixed_texts(records)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(FIELD_COLUMNS)
+        for r in records:
+            for f in r.ai_fields:
+                note = "yes" if f["text"] in fixed else ""
+                row = [r.name, f["name"], f["text"], f["confidence"], note, "ai"]
+                writer.writerow([_csv_safe(v) for v in row])
+    return path
+
+
+def _fields_section(records: Sequence[LetterRecord]) -> list[str]:
+    """Field names that recur across letters (markdown lines)."""
+    letters = Counter(name for r in records for name in {f["name"] for f in r.ai_fields})
+    recurring = sorted(((n, c) for n, c in letters.items() if c > 1), key=lambda x: (-x[1], x[0]))
+    fixed = fixed_texts(records)
+    total = sum(len(r.ai_fields) for r in records)
+    out = ["", f"## Variable fields (AI, {total} found)", ""]
+    out.append(
+        "Suggested by the AI step; each text was checked to be in its letter. See `fields.csv`. "
+        f"{len(fixed)} text(s) appear identically in two or more letters and are marked "
+        "probably fixed."
+    )
+    out.append("")
+    if not recurring:
+        return [*out, "No field name recurs across letters."]
+    out += ["| Field name | Letters |", "|---|---:|"]
+    return out + [f"| {name} | {count} |" for name, count in recurring]
+
+
+def _purpose_section(records: Sequence[LetterRecord]) -> list[str]:
+    """Table of purpose by layout (markdown lines)."""
+    tagged = [r for r in records if r.ai_purpose]
+    counts = Counter((r.ai_purpose, r.best_layout or "(no layout fits)") for r in tagged)
+    columns = sorted({layout for _, layout in counts})
+    out = ["", f"## Purpose by layout (AI, {len(tagged)} letter(s) tagged)", ""]
+    out.append("Letters with the same purpose in one column could share a template.")
+    out += ["", "| Purpose | " + " | ".join(columns) + " | Total |"]
+    out.append("|---|" + "---:|" * (len(columns) + 1))
+    for purpose in sorted({p for p, _ in counts}):
+        row = [counts[(purpose, c)] for c in columns]
+        out.append(f"| {purpose} | " + " | ".join(map(str, row)) + f" | {sum(row)} |")
+    return out
 
 
 def _md(name: str) -> str:
@@ -436,6 +526,7 @@ def write_markdown(
     settings: Settings,
     path: Path,
     ai_summary: dict[str, Any] | None = None,
+    extra_sections: Sequence[str] = (),
 ) -> Path:
     """Write the human-readable portfolio report to ``path``."""
     ok = [r for r in records if r.status == STATUS_OK]
@@ -514,11 +605,20 @@ def write_markdown(
     else:
         out.append("None.")
 
+    out += extra_sections
+    if any(r.ai_fields for r in records):
+        out += _fields_section(records)
+
+    if any(r.ai_purpose for r in records):
+        out += _purpose_section(records)
+
     if ai_summary is not None:
         out += ["", "## AI step", ""]
         out.append(ai_summary["line"])
         if ai_summary.get("stopped"):
             out.append(f"- {ai_summary['stopped']}")
+        for line in ai_summary.get("details", ()):
+            out.append(f"- {line}")
         for r in records:
             if not (r.ai_changes or r.ai_explanation or r.ai_error):
                 continue
@@ -530,6 +630,7 @@ def write_markdown(
                     f"({c['confidence']:.2f}): {c['reason']}"
                 )
             if r.ai_explanation:
+                out.append(f"- Why (rules): {r.rule_explanation}")
                 out.append(f"- Why (AI): {r.ai_explanation}")
             if r.ai_error:
                 out.append(f"- AI step warning: {r.ai_error}")

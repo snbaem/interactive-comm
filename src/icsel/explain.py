@@ -9,7 +9,7 @@ from __future__ import annotations
 from .config import DEFAULT_CONFIG, ScoringConfig
 from .dimensions import format_length
 from .extract import LetterStructure
-from .match import MatchResult
+from .match import MatchResult, resolve_ties
 from .profile import LayoutProfile
 
 #: A box closer than this (points) to its zone counts as lined up.
@@ -34,6 +34,28 @@ def _role_phrase(r: object, units: str) -> str | None:
     if abs(dx) > ALIGNED_WITHIN:
         parts.append(f"{format_length(abs(dx), units)} {'right' if dx > 0 else 'left'}")
     return f"the {role} sits {' and '.join(parts)} than its box"
+
+
+def explanation_reasons(
+    letter: LetterStructure,
+    layouts: list[LayoutProfile],
+    results: list[MatchResult],
+    config: ScoringConfig | None = None,
+) -> list[str]:
+    """Why this ranking deserves a closer look: ``no fit``, ``weak fit`` and/or ``near-tie``.
+
+    Empty for a letter that fits one layout cleanly; the optional AI explanation is
+    skipped then, because the rule-based text already says everything there is to say.
+    """
+    cfg = config or DEFAULT_CONFIG
+    if not results[0].fits:
+        return ["no fit"]
+    reasons = []
+    if results[0].score < cfg.low_fit_threshold:
+        reasons.append("weak fit")
+    if resolve_ties(letter, layouts, results, cfg.tie_margin).ambiguous:
+        reasons.append("near-tie")
+    return reasons
 
 
 def explain_ranking(

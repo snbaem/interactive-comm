@@ -20,7 +20,8 @@ real Interactive Communications output.
 | 1 | Packaging and quality | **Done** |
 | 2 | Better model and scoring | **Partly done** |
 | 3 | Optional AI step | **Done** |
-| 4 | Portfolio mode | **Done** (this change) |
+| 3b | AI mode that adds value | **Built**; not yet measured with a real model |
+| 4 | Portfolio mode | **Done** |
 | 5 | Docs and recipe draft | Not started |
 
 The phase order changed once: the AI step (3) now comes before portfolio mode (4), so
@@ -70,6 +71,37 @@ Off by default, provider-agnostic, no network in tests.
 - Prompts in `src/icsel/prompts/`, an example Anthropic backend behind the `llm` extra,
   configuration through environment variables (`.env.example`).
 - A note on personal data: send only text you are allowed to send to your model endpoint.
+
+## Phase 3b: AI mode that adds value (built, not yet measured with a real model)
+
+| Step | What | Status |
+| --- | --- | --- |
+| 0 | `icsel eval` and `truth.json` | Done |
+| 1 | `fields` task, `fields.csv`, reply cache | Done |
+| 2 | Layout proposals (rules) and `propose` task | Done |
+| 3 | `purpose` task and purpose-by-layout table | Done |
+| 4 | `explain` only for weak fits, near-ties and no-fits | Done |
+| 5 | Rendered-sample check | Not built, see below |
+
+Tasks other than `classify` and `explain` are off unless listed, and tasks that send letter
+text need a second switch. Rules decide first: no task replaces a rule-based label or the
+chosen layout. The tests use scripted backends, which check the arithmetic and the guard
+rails. They say nothing about how good a model is. **Whether a task beats the rules is open
+until `icsel eval` has been run with a real backend.**
+
+Known limits of the benchmark: the letters are synthetic and short; block roles are already
+almost all right (the rules label nearly every block), so `classify` has little room to
+improve them; the field truth follows simple patterns; the rules-only purpose baseline is
+always `other`, so the `purpose` task must also beat the best constant answer.
+
+**Design note: step 5, rendered-sample check (not built).** The condition was that the
+benchmark shows problems the text checks miss. No benchmark run with a real model exists, so
+there is no such evidence. If it appears: render the sample in the chosen layout, send one
+page image to a backend that takes images, ask for a closed list of defects (overlap, clipped
+text, empty box), and report each as a flagged suggestion next to `overflows()`, which
+already finds overflowing text without a model. It would need its own opt-in switch, because
+a page image contains letter text, and an image-capable backend. `CompletionBackend` takes
+text only, so it would be a separate optional protocol.
 
 ## Phase 4: Portfolio mode (done)
 

@@ -18,11 +18,21 @@ from typing import Any
 from . import __version__
 from .config import ConfigError, load_config
 from .dimensions import UNITS, diff_layouts, measure
+from .evaluate import LETTER_TASKS, TruthError, collect_truth, eval_markdown, evaluate
 from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
 from .inputs import InputError, collect_files, unique_stems
 from .layoutview import pdf_to_png, render_comparison, render_layout_view
-from .llm import Assistant, LLMError, available_backends, get_assistant
+from .llm import (
+    Assistant,
+    LLMError,
+    ReplyCache,
+    available_backends,
+    default_cache_dir,
+    get_assistant,
+    load_purposes,
+)
+from .llm.assistant import DEFAULT_TASKS, TASKS, TEXT_TASKS
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
 from .pipeline import analyze
 from .portfolio import (
@@ -35,9 +45,17 @@ from .portfolio import (
     run_ai,
     scan,
     write_csv,
+    write_fields_csv,
     write_markdown,
 )
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
+from .proposals import (
+    Proposal,
+    describe_with_ai,
+    proposals_markdown,
+    propose,
+    write_proposals,
+)
 from .render import render_sample
 from .report import APPROX_NOTE, build_result, dimensions_doc
 from .synthetic import generate, generate_portfolio
@@ -45,6 +63,15 @@ from .synthetic import generate, generate_portfolio
 EXIT_OK = 0
 EXIT_SOME_FAILED = 1
 EXIT_USAGE = 2
+
+#: What each AI task sends, for the notice printed before anything is sent.
+SENT = {
+    "classify": "the text of blocks the rules could not label, plus layout facts",
+    "explain": "scores and layout facts",
+    "propose": "geometry and layout ids of proposed layouts (no letter text)",
+    "fields": "LETTER TEXT (everything except letterhead and footer, names and addresses included)",
+    "purpose": "LETTER TEXT (the subject line and the first body paragraph)",
+}
 
 
 def structure_to_profile(letter: LetterStructure, profile_id: str, name: str = "") -> LayoutProfile:
@@ -100,11 +127,10 @@ def _print_ranking(name: str, results: list[MatchResult]) -> None:
 
 def _print_ai_notice(assistant: Assistant) -> None:
     info = assistant.describe()
-    print(
-        f"AI step ON: {info['backend']} / {info['model']} (tasks: {', '.join(info['tasks'])}).\n"
-        "  Sent: the text of blocks the rules could not label, plus layout facts and scores.\n"
-        "  Only use letters you are allowed to send to this service."
-    )
+    tasks = info["tasks"]
+    print(f"AI step ON: {info['backend']} / {info['model']} (tasks: {', '.join(tasks)}).")
+    print("  Sent: " + "; ".join(SENT[t] for t in SENT if t in tasks) + ".")
+    print("  Only use letters you are allowed to send to this service.")
 
 
 def _print_ai_result(llm: dict[str, Any]) -> None:
@@ -116,6 +142,17 @@ def _print_ai_result(llm: dict[str, Any]) -> None:
     if llm.get("explanation"):
         lines = textwrap.wrap(llm["explanation"], width=88)
         print("  Why (AI): " + "\n            ".join(lines))
+    if llm.get("fields", {}).get("result"):
+        found = [f for f in llm["fields"]["result"] if f["kind"] == "variable"]
+        names = ", ".join(f["name"] for f in found)
+        print(f"  AI: {len(found)} variable field(s): {names}")
+    if llm.get("purpose", {}).get("result"):
+        print(f"  AI: purpose {llm['purpose']['result']}")
+    for section in ("fields", "purpose"):
+        dropped = llm.get(section, {}).get("dropped")
+        if dropped:
+            why = ", ".join(f"{k} {n}" for k, n in dropped.items())
+            print(f"  AI: dropped {section} output: {why}")
     for err in llm.get("errors", []):
         print(f"  AI step warning: {err}", file=sys.stderr)
 
@@ -126,7 +163,7 @@ def cmd_match(args: argparse.Namespace) -> int:
     scoring = load_config(args.config)
     by_id = {lay.id: lay for lay in layouts}
     letters = collect_files(args.letters, ".pdf", recursive=args.recursive)
-    assistant = get_assistant(args.llm)
+    assistant = _assistant_from_args(args)
     if assistant.enabled:
         _print_ai_notice(assistant)
     stems = unique_stems(letters)
@@ -291,6 +328,18 @@ def _progress(label: str) -> Any:
     return show
 
 
+def _assistant_from_args(args: argparse.Namespace) -> Assistant:
+    """The assistant for ``--llm`` and the other AI options of a command."""
+    return get_assistant(
+        args.llm,
+        tasks=args.ai_tasks,
+        max_calls=args.max_calls,
+        send_text=[t for t in TEXT_TASKS if getattr(args, f"{t}_send_text")],
+        purposes=load_purposes(args.purposes) if args.purposes else None,
+        cache=None if args.no_ai_cache else ReplyCache(default_cache_dir()),
+    )
+
+
 def _confirm(question: str) -> bool:
     """Ask a yes/no question; anything but an interactive "y" or "yes" means no."""
     if not sys.stdin.isatty():
@@ -299,21 +348,43 @@ def _confirm(question: str) -> bool:
     return input(question).strip().lower() in ("y", "yes")
 
 
+def _ai_details(assistant: Any) -> list[str]:
+    """Calls made and model output dropped by validation, for the report."""
+    count = assistant.counters()
+    out = [f"Model calls: {count['calls']}; replies taken from the cache: {count['cache_hits']}."]
+    dropped = ", ".join(f"{why} {n}" for why, n in sorted(count["drops"].items()))
+    out.append(f"Model output dropped by validation: {dropped or 'none'}.")
+    return out
+
+
 def _portfolio_ai_step(
     args: argparse.Namespace,
     assistant: Assistant,
     records: list[LetterRecord],
     layouts: list[LayoutProfile],
     settings: Settings,
+    proposals: Sequence[Proposal] = (),
 ) -> dict[str, Any]:
     """Plan, estimate, confirm and run the AI step; return the summary for the report."""
     _print_ai_notice(assistant)
     plan = plan_ai(records, assistant)
+    plan.proposals = len(proposals) if "propose" in getattr(assistant, "tasks", ()) else 0
     print(
         f"AI step plan: up to {plan.calls} model call(s) for {len(records)} letter(s): "
         f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
-        "ambiguous, weak or no-fit letters. Letters that fit one layout cleanly make no call."
+        "ambiguous, weak or no-fit letters"
+        + (f", {len(plan.fields)} to detect fields" if plan.fields else "")
+        + (f", {len(plan.purpose)} to tag the purpose" if plan.purpose else "")
+        + (f", {plan.proposals} to name proposed layouts" if plan.proposals else "")
+        + "."
+        + (
+            ""
+            if plan.fields or plan.purpose
+            else " Letters that fit one layout cleanly make no call."
+        )
     )
+    if args.max_calls is not None and plan.calls > args.max_calls:
+        print(f"  Capped at {args.max_calls} call(s) by --max-calls.")
     if plan.calls == 0:
         line = "- Nothing to ask: no unknown blocks and no ambiguous, weak or no-fit letters."
         return {"line": line}
@@ -321,10 +392,11 @@ def _portfolio_ai_step(
         print("Skipped the AI step; the report is rule-based only.")
         return {"line": "- Skipped (not confirmed); the report is rule-based only."}
     stopped = run_ai(plan, layouts, assistant, settings, _progress("AI"))
+    if plan.proposals and not stopped:
+        stopped = describe_with_ai(proposals, assistant)
     info = assistant.describe()
-    touched = len({id(r) for r in [*plan.classify, *plan.explain]})
-    line = f"- Ran {info['backend']} / {info['model']} on {touched} letter(s)."
-    return {"line": line, "stopped": stopped}
+    line = f"- Ran {info['backend']} / {info['model']} on {len(plan.letters())} letter(s)."
+    return {"line": line, "stopped": stopped, "details": _ai_details(assistant)}
 
 
 def cmd_portfolio(args: argparse.Namespace) -> int:
@@ -338,18 +410,35 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         args.duplicate_threshold,
         scoring,
     )
-    assistant = get_assistant(args.llm)
+    assistant = _assistant_from_args(args)
     print(f"Matching {len(paths)} PDF(s) against {len(layouts)} layout(s)...", file=sys.stderr)
     records = scan(paths, layouts, settings, _progress("matched"))
     groups = find_duplicate_groups(records, settings.duplicate_threshold)
 
+    # Computed from the rule-based result, before any AI step.
+    proposals: list[Proposal] = []
+    alone: list[LetterRecord] = []
+    want_proposals = args.proposals or "propose" in getattr(assistant, "tasks", ())
+    if want_proposals:
+        proposals, alone = propose(records, layouts, scoring)
+
     ai_summary: dict[str, Any] | None = None
     if assistant.enabled:
-        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings)
+        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings, proposals)
 
     out: Path = args.out
+    sections: list[str] = []
+    if want_proposals:
+        write_proposals(proposals, out / "proposals")
+        sections = proposals_markdown(proposals, alone, scoring)
+        total = len(alone) + sum(len(p.members) for p in proposals)
+        print(f"Proposed {len(proposals)} layout(s) from {total} weak or no-fit letter(s).")
     csv_path = write_csv(records, out / "portfolio.csv")
-    md_path = write_markdown(records, groups, layouts, settings, out / "portfolio.md", ai_summary)
+    if any(r.ai_fields for r in records):
+        print(f"Wrote {write_fields_csv(records, out / 'fields.csv')}")
+    md_path = write_markdown(
+        records, groups, layouts, settings, out / "portfolio.md", ai_summary, sections
+    )
     matched = sum(1 for r in records if r.status == STATUS_OK)
     unreadable = len(records) - matched
     print(f"Scanned {len(records)} PDF(s): {matched} matched, {unreadable} unreadable or no text.")
@@ -361,12 +450,51 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Benchmark the rules, and the rules plus each AI task, against the ground truth."""
+    layouts = load_profiles(args.layouts)
+    scoring = load_config(args.config)
+    paths = collect_files(args.letters, ".pdf", recursive=args.recursive)
+    letters, skipped = collect_truth(paths, args.truth)
+    if not letters:
+        raise TruthError("no readable letter has an entry in the ground-truth file")
+    assistant: Assistant | None = _assistant_from_args(args)
+    if assistant is not None and assistant.enabled:
+        _print_ai_notice(assistant)
+        tasks = [t for t in getattr(assistant, "tasks", ()) if t in LETTER_TASKS]
+        most = len(letters) * len(tasks)
+        if args.max_calls is not None:
+            most = min(most, args.max_calls)
+        print(f"AI step plan: up to {most} model call(s) for {len(letters)} letter(s).")
+        if most and not (args.yes or _confirm("Proceed with the AI step? [y/N] ")):
+            print("Skipped the AI step; evaluating the rules only.")
+            assistant = None
+    else:
+        assistant = None
+    doc = evaluate(letters, layouts, assistant, scoring, _progress("evaluated"))
+    doc["skipped_files"] = skipped
+    text = eval_markdown(doc)
+    out: Path = args.out
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "eval.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    (out / "eval.md").write_text(text, encoding="utf-8")
+    print(text)
+    if skipped:
+        print(f"{skipped} file(s) without truth or text were skipped.", file=sys.stderr)
+    print(f"Wrote {out / 'eval.json'} and {out / 'eval.md'}")
+    return EXIT_OK
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the local browser UI."""
     from .web import serve  # imported lazily: only this command needs the web module
 
     layouts = load_profiles(args.layouts) if args.layouts else None
     assistant = get_assistant(args.llm)
+    extra = set(getattr(assistant, "tasks", ())) - set(DEFAULT_TASKS)
+    if extra:
+        # The page tells users what is sent; it only knows about the default tasks.
+        raise LLMError(f"icsel serve does not support AI task(s) {', '.join(sorted(extra))}")
     if assistant.enabled:
         _print_ai_notice(assistant)
     try:
@@ -383,6 +511,48 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: cannot listen on {where} ({exc})", file=sys.stderr)
         return EXIT_USAGE
     return EXIT_OK
+
+
+def _call_cap(text: str) -> int:
+    """Argument type of ``--max-calls``: a whole number, 0 or more."""
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return value
+
+
+def _add_ai_options(parser: argparse.ArgumentParser, llm_help: str) -> None:
+    """Options shared by the commands that can run the AI step."""
+    parser.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    parser.add_argument(
+        "--ai-tasks",
+        metavar="LIST",
+        help="comma list of AI tasks: "
+        + ", ".join(TASKS)
+        + " (default: ICSEL_LLM_TASKS, else "
+        + ",".join(DEFAULT_TASKS)
+        + ")",
+    )
+    parser.add_argument(
+        "--max-calls", type=_call_cap, metavar="N", help="hard cap on model calls for this run"
+    )
+    for task in TEXT_TASKS:
+        parser.add_argument(
+            f"--{task}-send-text",
+            action="store_true",
+            help=f"allow the '{task}' task to send letter text (off by default)",
+        )
+    parser.add_argument(
+        "--purposes",
+        type=Path,
+        metavar="FILE",
+        help="purposes for the 'purpose' task (default: src/icsel/data/purposes.json)",
+    )
+    parser.add_argument(
+        "--no-ai-cache",
+        action="store_true",
+        help="do not read or write cached model replies (default cache: out/.ai-cache)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -435,7 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--units", choices=UNITS, default="in", help="units for measurements (default: in)"
     )
     m.add_argument("--config", type=Path, metavar="FILE", help=config_help)
-    m.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    _add_ai_options(m, llm_help)
     m.set_defaults(func=cmd_match)
 
     sl = sub.add_parser(
@@ -518,7 +688,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="body-text similarity at or above which letters are near-duplicates "
         f"(default: {DUPLICATE_THRESHOLD})",
     )
-    po.add_argument("--llm", metavar="BACKEND", help=llm_help)
+    _add_ai_options(po, llm_help)
+    po.add_argument(
+        "--proposals",
+        action="store_true",
+        help="also draft new layouts from clusters of weak and no-fit letters (no model needed; "
+        "implied by the 'propose' AI task)",
+    )
     po.add_argument(
         "--yes",
         action="store_true",
@@ -541,6 +717,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--layouts", type=Path, help="layout folder (default: bundled examples)")
     s.set_defaults(func=cmd_samples)
+
+    ev = sub.add_parser(
+        "eval", help="benchmark the rules, and each AI task, against ground-truth letters"
+    )
+    ev.add_argument(
+        "letters",
+        nargs="+",
+        type=Path,
+        metavar="PATH",
+        help="letter PDF(s), folder(s) or glob pattern(s)",
+    )
+    ev.add_argument(
+        "--truth", type=Path, metavar="FILE", help="ground truth (default: truth.json next to each)"
+    )
+    ev.add_argument("--layouts", action="append", type=Path, metavar="PATH", help=layouts_help)
+    ev.add_argument("--config", type=Path, metavar="FILE", help=config_help)
+    ev.add_argument(
+        "--out",
+        type=Path,
+        default=Path("out") / "eval",
+        help="folder for eval.json and eval.md (default: out/eval)",
+    )
+    ev.add_argument("-r", "--recursive", action="store_true", help="also search subfolders")
+    _add_ai_options(ev, llm_help)
+    ev.add_argument(
+        "--yes",
+        action="store_true",
+        help="run the AI step without asking after the call estimate (needed when not interactive)",
+    )
+    ev.set_defaults(func=cmd_eval)
 
     w = sub.add_parser("serve", help="open a local browser UI to try letters and layouts")
     w.add_argument("--host", default="127.0.0.1", help="address to listen on (default: 127.0.0.1)")
@@ -574,6 +780,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except (ExtractionError, ProfileError, ConfigError, InputError, LLMError) as exc:
+    except (
+        ExtractionError,
+        ProfileError,
+        ConfigError,
+        InputError,
+        LLMError,
+        TruthError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

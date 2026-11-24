@@ -25,6 +25,10 @@ class LLMError(RuntimeError):
     """The AI step failed or is misconfigured. Matching continues without it."""
 
 
+class LLMCallLimit(LLMError):
+    """The run reached its cap on model calls (``--max-calls``)."""
+
+
 @runtime_checkable
 class CompletionBackend(Protocol):
     """Transport to one model provider."""

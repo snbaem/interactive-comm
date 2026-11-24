@@ -363,6 +363,7 @@ def test_cli_asks_before_calling_and_needs_yes_when_not_interactive(
     assert 2 <= len(backend.calls) <= 10
     report = (tmp_path / "yes" / "portfolio.md").read_text(encoding="utf-8")
     assert "## AI step" in report and "Why (AI): Short explanation." in report
+    assert report.index("- Why (rules): ") < report.index("- Why (AI): ")
     assert "AI labeled block" in report
 
 

@@ -10,6 +10,14 @@ What is sent to the model:
 * **Explaining the fit:** scores, offsets, hard-check failures and role counts
   (:func:`fit_facts`). No letter text at all.
 
+* **Detecting fields** (``fields``, off by default, needs its own opt-in): the text of
+  every block except letterhead and footer. See :mod:`icsel.llm.fields`.
+
+* **Tagging the purpose** (``purpose``, off by default, needs its own opt-in): the subject
+  line and the first body paragraph.
+* **Naming proposed layouts** (``propose``, off by default): box geometry and layout ids.
+  No letter text and no file names.
+
 What the model may change (:func:`apply_suggestions`): only blocks the rules left
 ``unknown``, only to a known role, only above a confidence threshold, and never a
 second date, address or subject on page 1. Rule-based roles are never overridden.
@@ -19,20 +27,32 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from typing import Any
+from collections.abc import Callable, Collection
+from typing import Any, TypeVar
 
 from ..extract import LetterStructure
 from ..match import LOW_FIT_THRESHOLD, MatchResult
 from ..profile import ROLES
-from .base import CompletionBackend, LLMError, RoleChange, Suggestion
-from .prompts import render_prompt
+from .base import CompletionBackend, LLMCallLimit, LLMError, RoleChange, Suggestion
+from .cache import ReplyCache
+from .fields import FIELDS_SCHEMA, FieldSpan, letter_blocks, parse_fields
+from .prompts import render_prompt, template_version
+from .propose import PROPOSE_SCHEMA, parse_proposal
+from .purpose import OTHER, load_purposes, parse_purpose, purpose_payload, purpose_schema
 
 #: Most characters of one unknown block's text that are sent.
 MAX_BLOCK_TEXT = 600
 #: Roles a letter has at most once (on page 1).
 SINGLE_ROLES = ("date", "address", "subject")
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
-TASKS = ("classify", "explain")
+TASKS = ("classify", "explain", "fields", "propose", "purpose")
+#: Jobs that run when AI is on and no task list is given.
+DEFAULT_TASKS = ("classify", "explain")
+
+#: Jobs that send letter body text. Each also needs its own opt-in switch.
+TEXT_TASKS = ("fields", "purpose")
+
+T = TypeVar("T")
 
 CLASSIFY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -190,14 +210,35 @@ class LLMAssistant:
         self,
         backend: CompletionBackend,
         min_confidence: float = 0.5,
-        tasks: tuple[str, ...] = TASKS,
+        tasks: tuple[str, ...] = DEFAULT_TASKS,
+        max_calls: int | None = None,
+        send_text: Collection[str] = (),
+        cache: ReplyCache | None = None,
+        purposes: tuple[str, ...] | None = None,
     ) -> None:
         unknown = set(tasks) - set(TASKS)
         if unknown:
             raise LLMError(f"unknown AI task(s) {sorted(unknown)}; choose from {list(TASKS)}")
+        for task in TEXT_TASKS:
+            if task in tasks and task not in send_text:
+                raise LLMError(
+                    f"AI task '{task}' sends letter text. To allow that, add --{task}-send-text "
+                    f"or set ICSEL_LLM_{task.upper()}_SEND_TEXT=1"
+                )
         self.backend = backend
         self.min_confidence = min_confidence
         self.tasks = tuple(tasks)
+        self.max_calls = max_calls
+        self.cache = cache
+        #: Allowed purposes; only read when the task is on.
+        self.purposes = purposes or (load_purposes() if "purpose" in tasks else ())
+        #: Model calls made, replies taken from the cache, and model items that were
+        #: dropped by validation (``"task: reason"`` -> count).
+        self.calls = 0
+        self.cache_hits = 0
+        self.drops: Counter[str] = Counter()
+        #: Token totals, or ``None`` until the backend reports usage.
+        self.tokens: dict[str, int] | None = None
 
     def describe(self) -> dict[str, Any]:
         """Backend, model and enabled tasks."""
@@ -208,6 +249,65 @@ class LLMAssistant:
             "tasks": list(self.tasks),
         }
 
+    def counters(self) -> dict[str, Any]:
+        """Snapshot of calls, cache hits, tokens and dropped items so far."""
+        return {
+            "calls": self.calls,
+            "cache_hits": self.cache_hits,
+            "tokens": None if self.tokens is None else dict(self.tokens),
+            "drops": dict(self.drops),
+        }
+
+    def _drop(self, task: str, reason: str) -> None:
+        self.drops[f"{task}: {reason}"] += 1
+
+    def _count_usage(self) -> None:
+        """Add the backend's optional ``last_usage`` (token name -> count) to the totals."""
+        usage = getattr(self.backend, "last_usage", None)
+        if usage:
+            self.tokens = self.tokens or {}
+            for key, n in usage.items():
+                self.tokens[key] = self.tokens.get(key, 0) + int(n)
+
+    def _ask(
+        self,
+        task: str,
+        template: str,
+        parse: Callable[[str], T],
+        schema: dict[str, Any] | None = None,
+        **values: str,
+    ) -> T:
+        """Render a prompt, call the model (within the cap) and validate the reply."""
+        system, prompt = render_prompt(template, **values)
+        key = ""
+        if self.cache is not None:
+            key = self.cache.key(
+                task,
+                template_version(template),
+                self.backend.name,
+                self.backend.model,
+                json.dumps([system, prompt, schema], sort_keys=True),
+            )
+            stored = self.cache.get(key)
+            if stored is not None:
+                drops = self.drops.copy()
+                try:
+                    result = parse(stored)
+                except LLMError:
+                    self.drops = drops  # damaged entry: ask again
+                else:
+                    self.cache_hits += 1
+                    return result
+        if self.max_calls is not None and self.calls >= self.max_calls:
+            raise LLMCallLimit(f"reached the cap of {self.max_calls} model call(s)")
+        self.calls += 1
+        raw = self.backend.complete(system, prompt, schema)
+        self._count_usage()
+        result = parse(raw)  # raises for a bad reply, which is then never cached
+        if self.cache is not None and result is not None:
+            self.cache.put(key, raw)
+        return result
+
     def classify_unknown(self, letter: LetterStructure) -> list[Suggestion]:
         """Ask the model about ``unknown`` blocks. No call is made if there are none."""
         if "classify" not in self.tasks:
@@ -215,17 +315,65 @@ class LLMAssistant:
         payload = classification_payload(letter)
         if not payload["unknown_indexes"]:
             return []
-        system, prompt = render_prompt(
+        return self._ask(
+            "classify",
             "classify_blocks",
+            parse_suggestions,
+            CLASSIFY_SCHEMA,
             roles=", ".join(r for r in ROLES if r != "unknown"),
             payload=json.dumps(payload, indent=2),
         )
-        return parse_suggestions(self.backend.complete(system, prompt, CLASSIFY_SCHEMA))
+
+    def detect_fields(self, letter: LetterStructure) -> list[FieldSpan]:
+        """Ask the model which text is fixed and which is variable. Sends letter text."""
+        if "fields" not in self.tasks:
+            return []
+        blocks = letter_blocks(letter)
+        if not blocks:
+            return []
+        return self._ask(
+            "fields",
+            "detect_fields",
+            lambda raw: parse_fields(
+                raw, blocks, self.min_confidence, lambda why: self._drop("fields", why)
+            ),
+            FIELDS_SCHEMA,
+            blocks=json.dumps(blocks, indent=1, ensure_ascii=False),
+        )
+
+    def tag_purpose(self, letter: LetterStructure) -> str:
+        """Ask for the letter's purpose, one of :attr:`purposes`. Sends letter text."""
+        payload = purpose_payload(letter)
+        if "purpose" not in self.tasks or not payload:
+            return OTHER
+        return self._ask(
+            "purpose",
+            "tag_purpose",
+            lambda raw: parse_purpose(raw, self.purposes, lambda why: self._drop("purpose", why)),
+            purpose_schema(self.purposes),
+            purposes=", ".join(self.purposes),
+            letter=json.dumps(payload, indent=1, ensure_ascii=False),
+        )
+
+    def propose_layout(self, facts: dict[str, Any]) -> dict[str, Any] | None:
+        """Ask for a name and rationale for a draft layout. Sends geometry only."""
+        if "propose" not in self.tasks:
+            return None
+        return self._ask(
+            "propose",
+            "propose_layout",
+            lambda raw: parse_proposal(raw, lambda why: self._drop("propose", why)),
+            PROPOSE_SCHEMA,
+            facts=json.dumps(facts, indent=1),
+        )
 
     def explain_fit(self, facts: dict[str, Any]) -> str | None:
         """Ask the model for a short explanation of the ranking."""
         if "explain" not in self.tasks:
             return None
-        system, prompt = render_prompt("explain_fit", facts=json.dumps(facts, indent=2))
-        text = self.backend.complete(system, prompt).strip()
-        return text or None
+        return self._ask(
+            "explain",
+            "explain_fit",
+            lambda raw: raw.strip() or None,
+            facts=json.dumps(facts, indent=2),
+        )
