@@ -18,11 +18,11 @@ real Interactive Communications output.
 | Phase | What | Status |
 | --- | --- | --- |
 | 1 | Packaging and quality | **Done** |
-| 2 | Better model and scoring | **Partly done** |
+| 2 | Better model and scoring | **Done** |
 | 3 | Optional AI step | **Done** |
 | 3b | AI mode that adds value | **Built**; not yet measured with a real model |
 | 4 | Portfolio mode | **Done** |
-| 5 | Docs and recipe draft | Not started |
+| 5 | Docs and recipe draft | **Done** (draft, not published) |
 
 The phase order changed once: the AI step (3) now comes before portfolio mode (4), so
 portfolio mode could be designed around it. It calls the AI only where it helps and
@@ -128,22 +128,17 @@ text only, so it would be a separate optional protocol.
   planted cases: four near-ties, a weak fit, a no-fit letter, one duplicate pair, two notices
   with a table, an image-only PDF and a corrupt file. `tests/test_portfolio.py` checks each.
 
-## Phase 5: Docs and recipe draft (not started)
+## Phase 5: Docs and recipe draft (done)
 
-- `README.md`: screenshots (source letter beside sample output), quick starts, limitations.
-- `docs/architecture.md`: pipeline diagram (Mermaid), modules, scoring formula.
-- `docs/profile-schema.md`: the layout profile format, and how to produce one from a
-  reference PDF or by hand.
-- `docs/getting-real-templates-in.md`: three options (hand-written profile; one reference PDF
-  per template generated from the platform with placeholder text; parsing an exported
-  template), with pros and cons. Anything platform-specific is marked `UNVERIFIED`.
-- `docs/production-path.md`: how this could become an in-platform component (a thin component
-  or asset action, an external service for PDF parsing and scoring, results stored as asset
-  metadata). A design sketch with open questions, all `UNVERIFIED`: outbound calls from the
-  authoring tier, approved model endpoints, whether draft ICs can be created programmatically.
-- `docs/recipe-draft.md`: an Experience League AI Recipe draft (title and category, problem,
-  architecture, step-by-step, testing with synthetic data, community value).
-- `docs/REVIEW.md`: what is verified, what is `UNVERIFIED`, known limitations.
+- `README.md` for a first-time reader, with images from `scripts/make_screenshots.py`.
+- `docs/architecture.md`, `docs/profile-schema.md`, `docs/getting-real-templates-in.md`,
+  `docs/production-path.md`, `docs/recipe-draft.md` and `REVIEW.md` (at the repo root).
+- `tests/test_docs.py` checks that options, links and images in the docs exist and that
+  `REVIEW.md` lists every file with an `UNVERIFIED` item.
+
+Skipped or open: no Adobe documentation was consulted, so every platform statement stays
+`UNVERIFIED`; the recipe is a draft and its submission format is not checked; no benchmark with
+a real model; the two browser images need an installed Chromium-based browser.
 
 ## Definition of done for the repo
 
