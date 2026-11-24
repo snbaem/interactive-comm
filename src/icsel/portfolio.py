@@ -41,6 +41,7 @@ from typing import Any
 
 from .config import ScoringConfig
 from .dimensions import letter_vs_layout
+from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, NoTextError, extract
 from .llm import Assistant, LLMCallLimit, LLMError, apply_suggestions, fit_facts
 from .match import CAPACITY_ROLES, LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
@@ -114,6 +115,8 @@ class LetterRecord:
     duplicate_group: str = ""
     ai_changes: list[dict[str, Any]] = field(default_factory=list)
     ai_explanation: str | None = None
+    #: Rule-based explanation, kept only for letters the AI step explains too.
+    rule_explanation: str = ""
     ai_error: str = ""
     #: Variable fields found by the AI step (plain data, see :class:`icsel.llm.FieldSpan`).
     ai_fields: list[dict[str, Any]] = field(default_factory=list)
@@ -398,6 +401,9 @@ def run_ai(
                     tb = resolve_ties(
                         letter, layouts, rank(letter, layouts, settings.scoring), settings.margin
                     )
+                record.rule_explanation = explain_ranking(
+                    letter, layouts, tb.results, settings.scoring
+                )
                 record.ai_explanation = assistant.explain_fit(
                     fit_facts(letter, tb.results, changes)
                 )
@@ -624,6 +630,7 @@ def write_markdown(
                     f"({c['confidence']:.2f}): {c['reason']}"
                 )
             if r.ai_explanation:
+                out.append(f"- Why (rules): {r.rule_explanation}")
                 out.append(f"- Why (AI): {r.ai_explanation}")
             if r.ai_error:
                 out.append(f"- AI step warning: {r.ai_error}")

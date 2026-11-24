@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import ScoringConfig
+from .explain import explanation_reasons
 from .extract import LetterStructure
 from .llm import Assistant, LLMError, NoOpAssistant, apply_suggestions, fit_facts
 from .match import MatchResult, rank
@@ -51,7 +52,8 @@ def analyze(
 
     Order: the assistant may relabel ``unknown`` blocks (guarded, see
     :func:`icsel.llm.apply_suggestions`), then layouts are ranked, then the
-    assistant explains the ranking. Any AI failure is recorded in
+    assistant explains the ranking, but only when the rules flag a weak fit, a
+    near-tie or no fit (``llm["explain_reasons"]``). Any AI failure is recorded in
     ``llm["errors"]`` and matching continues with the rule-based result.
     """
     assistant = assistant or NoOpAssistant()
@@ -75,9 +77,12 @@ def analyze(
         info["purpose"] = _with_drops(
             assistant, "purpose", lambda ai: ai.tag_purpose(letter), errors
         )
-    if assistant.enabled:
+    if assistant.enabled and "explain" in getattr(assistant, "tasks", ("explain",)):
+        reasons = explanation_reasons(letter, layouts, results, config)
+        info["explain_reasons"] = reasons
         try:
-            info["explanation"] = assistant.explain_fit(fit_facts(letter, results, changes))
+            if reasons:
+                info["explanation"] = assistant.explain_fit(fit_facts(letter, results, changes))
         except LLMError as exc:
             errors.append(f"explanation failed: {exc}")
     if assistant.enabled:
