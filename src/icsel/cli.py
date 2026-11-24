@@ -58,6 +58,7 @@ from .proposals import (
 )
 from .render import render_sample
 from .report import APPROX_NOTE, build_result, dimensions_doc
+from .sharedtext import SharedGroup, find_shared, name_with_ai, shared_markdown, write_shared_csv
 from .synthetic import generate, generate_portfolio
 
 EXIT_OK = 0
@@ -69,6 +70,7 @@ SENT = {
     "classify": "the text of blocks the rules could not label, plus layout facts",
     "explain": "scores and layout facts",
     "propose": "geometry and layout ids of proposed layouts (no letter text)",
+    "fragments": "wording shared by several letters (digits, addresses and differences masked)",
     "fields": "LETTER TEXT (everything except letterhead and footer, names and addresses included)",
     "purpose": "LETTER TEXT (the subject line and the first body paragraph)",
 }
@@ -366,11 +368,13 @@ def _portfolio_ai_step(
     layouts: list[LayoutProfile],
     settings: Settings,
     proposals: Sequence[Proposal] = (),
+    shared: Sequence[SharedGroup] = (),
 ) -> dict[str, Any]:
     """Plan, estimate, confirm and run the AI step; return the summary for the report."""
     _print_ai_notice(assistant)
     plan = plan_ai(records, assistant)
     plan.proposals = len(proposals) if "propose" in getattr(assistant, "tasks", ()) else 0
+    plan.fragments = len(shared) if "fragments" in getattr(assistant, "tasks", ()) else 0
     print(
         f"AI step plan: up to {plan.calls} model call(s) for {len(records)} letter(s): "
         f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
@@ -378,6 +382,7 @@ def _portfolio_ai_step(
         + (f", {len(plan.fields)} to detect fields" if plan.fields else "")
         + (f", {len(plan.purpose)} to tag the purpose" if plan.purpose else "")
         + (f", {plan.proposals} to name proposed layouts" if plan.proposals else "")
+        + (f", {plan.fragments} to name shared text" if plan.fragments else "")
         + "."
         + (
             ""
@@ -396,6 +401,8 @@ def _portfolio_ai_step(
     stopped = run_ai(plan, layouts, assistant, settings, _progress("AI"))
     if plan.proposals and not stopped:
         stopped = describe_with_ai(proposals, assistant)
+    if plan.fragments and not stopped:
+        stopped = name_with_ai(shared, assistant)
     info = assistant.describe()
     line = f"- Ran {info['backend']} / {info['model']} on {len(plan.letters())} letter(s)."
     return {"line": line, "stopped": stopped, "details": _ai_details(assistant)}
@@ -413,6 +420,7 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         scoring,
     )
     assistant = _assistant_from_args(args)
+    settings.shared_text = args.shared_text or "fragments" in getattr(assistant, "tasks", ())
     print(f"Matching {len(paths)} PDF(s) against {len(layouts)} layout(s)...", file=sys.stderr)
     records = scan(paths, layouts, settings, _progress("matched"))
     groups = find_duplicate_groups(records, settings.duplicate_threshold)
@@ -424,9 +432,15 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     if want_proposals:
         proposals, alone = propose(records, layouts, scoring)
 
+    shared: list[SharedGroup] = []
+    if settings.shared_text:
+        shared = find_shared([u for r in records for u in r.texts], scoring)
+
     ai_summary: dict[str, Any] | None = None
     if assistant.enabled:
-        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings, proposals)
+        ai_summary = _portfolio_ai_step(
+            args, assistant, records, layouts, settings, proposals, shared
+        )
 
     out: Path = args.out
     sections: list[str] = []
@@ -435,6 +449,10 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         sections = proposals_markdown(proposals, alone, scoring)
         total = len(alone) + sum(len(p.members) for p in proposals)
         print(f"Proposed {len(proposals)} layout(s) from {total} weak or no-fit letter(s).")
+    if settings.shared_text:
+        sections += shared_markdown(shared, scoring)
+        print(f"Found {len(shared)} shared text(s) (candidates for reusable fragments).")
+        print(f"Wrote {write_shared_csv(shared, out / 'shared-text.csv')}")
     csv_path = write_csv(records, out / "portfolio.csv")
     if any(r.ai_fields for r in records):
         print(f"Wrote {write_fields_csv(records, out / 'fields.csv')}")
@@ -696,6 +714,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also draft new layouts from clusters of weak and no-fit letters (no model needed; "
         "implied by the 'propose' AI task)",
+    )
+    po.add_argument(
+        "--shared-text",
+        action="store_true",
+        help="also find text that recurs across letters and write shared-text.csv (no model "
+        "needed; implied by the 'fragments' AI task)",
     )
     po.add_argument(
         "--yes",

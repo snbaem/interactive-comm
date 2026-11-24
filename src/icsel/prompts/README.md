@@ -9,10 +9,11 @@ set `ICSEL_LLM=<backend>`.
 | `explain_fit.md` | One-paragraph "why this fit", only for weak fits, near-ties and no-fits | Scores, offsets, hard-check failures and role counts. **No letter text.** |
 | `detect_fields.md` | Mark text as fixed or variable and name the variable fields | **The text of every block except letterhead and footer**, up to 12,000 characters. Needs `--fields-send-text` |
 | `tag_purpose.md` | Choose one purpose from a list | **The subject line and first body paragraph**, up to 800 characters. Needs `--purpose-send-text` |
+| `name_fragment.md` | Name a shared-text candidate and describe it in one line | **Wording that every letter of the group has in common** (up to 800 characters); digits become `#`, address lines and differing words become `[...]` |
 | `propose_layout.md` | Name a proposed layout and say how it differs from the nearest one | Geometry of the draft and the nearest layout, their ids, cluster size. **No letter text.** |
 
 Each file holds the system prompt, a line `---USER---`, then the user prompt.
-`$payload`, `$roles`, `$facts`, `$blocks`, `$purposes` and `$letter` are filled in by icsel.
+`$payload`, `$roles`, `$facts`, `$blocks`, `$fragment`, `$purposes` and `$letter` are filled in by icsel.
 A changed template is a new prompt version, so cached replies are not reused. To change the wording,
 copy this folder, edit the copies and set `ICSEL_PROMPTS_DIR` to the new folder.
 

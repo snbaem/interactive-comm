@@ -14,6 +14,9 @@ rules plus one task at a time, so each task has to earn its place:
 * **purpose accuracy**: the rules have no purpose tagger, so their baseline is always
   ``other``. That is easy to beat, so the task must also beat the best constant answer
   (the most common true purpose) before it counts as an improvement.
+* **boilerplate recall and precision**: texts that the generator wrote identically into two
+  or more letters (truth ``boilerplate``) against the shared texts found by
+  :mod:`icsel.sharedtext`. This is found by rules; no task is judged on it.
 * **layout agreement**: the chosen layout (portfolio tie-break included) is the one the
   letter was built from; for a fits-no-layout letter, that no layout fits.
 
@@ -36,6 +39,7 @@ from .extract import ExtractionError, LetterStructure, extract
 from .llm import Assistant, LLMCallLimit, LLMError, apply_suggestions, fit_facts
 from .match import rank, resolve_ties
 from .profile import LayoutProfile
+from .sharedtext import TextUnit, find_shared, letter_units, normalize
 
 TRUTH_FILE = "truth.json"
 #: Purpose assumed when nothing tags the letter.
@@ -90,6 +94,10 @@ class Tally:
     purposes_constant: int = 0
     layouts: int = 0
     layouts_right: int = 0
+    boilerplate_true: int = 0
+    boilerplate_recalled: int = 0
+    boilerplate_found: int = 0
+    boilerplate_right: int = 0
 
     def metrics(self) -> dict[str, float | None]:
         """Accuracy, precision and recall figures, rounded; ``None`` = not measurable."""
@@ -106,6 +114,8 @@ class Tally:
             "name_accuracy": ratio(self.names_right, self.fields_right),
             "purpose_accuracy": ratio(self.purposes_right, self.purposes),
             "layout_agreement": ratio(self.layouts_right, self.layouts),
+            "boilerplate_recall": ratio(self.boilerplate_recalled, self.boilerplate_true),
+            "boilerplate_precision": ratio(self.boilerplate_right, self.boilerplate_found),
         }
         return {k: None if v is None else round(v, 4) for k, v in raw.items()}
 
@@ -196,6 +206,27 @@ def _score_letter(
         tally.layouts_right += (best.layout_id if best.fits else None) == truth["layout"]
 
 
+def _score_boilerplate(
+    tally: Tally, truth: dict[str, list[dict[str, str]]], units: list[TextUnit], cfg: ScoringConfig
+) -> None:
+    """Compare shared texts with the true ones, per letter and place."""
+
+    def key(text: str) -> str:
+        return f" {' '.join(normalize(text))} "
+
+    true = {(n, t["place"], key(t["text"])) for n, texts in truth.items() for t in texts}
+    found = {(u.letter, u.place, key(u.text)) for g in find_shared(units, cfg) for u in g.units}
+
+    def same(a: tuple[str, str, str], b: tuple[str, str, str]) -> bool:
+        # A header may be read as one block although it was drawn as two lines.
+        return a[:2] == b[:2] and (a[2] in b[2] or b[2] in a[2])
+
+    tally.boilerplate_true = len(true)
+    tally.boilerplate_found = len(found)
+    tally.boilerplate_recalled = sum(any(same(t, f) for f in found) for t in true)
+    tally.boilerplate_right = sum(any(same(t, f) for t in true) for f in found)
+
+
 def _run_task(
     task: str,
     assistant: Any,
@@ -239,6 +270,8 @@ def run_eval(
     in_a_row = 0
     common = Counter(t["purpose"] for _, t in letters if "purpose" in t).most_common(1)
     out.tally.purposes_constant = common[0][1] if common else 0
+    units: list[TextUnit] = []
+    boilerplate: dict[str, list[dict[str, str]]] = {}
     for i, (path, truth) in enumerate(letters, start=1):
         letter = extract(path)
         found, purpose = rule_fields(letter), NO_PURPOSE
@@ -257,8 +290,12 @@ def run_eval(
                 if in_a_row >= MAX_FAILURES_IN_A_ROW:
                     out.stopped = f"stopped after {in_a_row} failures in a row (last: {exc})"
         _score_letter(out.tally, truth, letter, layouts, cfg, found, purpose)
+        if "boilerplate" in truth:
+            boilerplate[str(path)] = truth["boilerplate"]
+            units += letter_units(letter, str(path))
         if progress:
             progress(i, len(letters))
+    _score_boilerplate(out.tally, boilerplate, units, cfg)
     if ai and before:
         after = ai.counters()
         out.calls = after["calls"] - before["calls"]
@@ -352,13 +389,15 @@ def eval_markdown(doc: dict[str, Any]) -> str:
     out += ["", "## Results", ""]
     out.append(
         "| Run | Role accuracy | Field precision | Field recall | Field names | "
-        "Purpose accuracy | Layout agreement | Calls | Cached | Dropped | Failed |"
+        "Purpose accuracy | Layout agreement | Boilerplate recall | Boilerplate precision | "
+        "Calls | Cached | Dropped | Failed |"
     )
-    out.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    out.append("|---|" + "---:|" * 12)
     for run in doc["runs"]:
         m = run["metrics"]
         keys = ("role_accuracy", "field_precision", "field_recall", "name_accuracy",
-                "purpose_accuracy", "layout_agreement")  # fmt: skip
+                "purpose_accuracy", "layout_agreement", "boilerplate_recall",
+                "boilerplate_precision")  # fmt: skip
         cells = " | ".join(_cell(m[k]) for k in keys)
         out.append(
             f"| {run['run']} | {cells} | {run['model_calls']} | {run['cache_hits']} | "
@@ -387,7 +426,7 @@ def eval_markdown(doc: dict[str, Any]) -> str:
         "",
         "Field baseline: the date and address lines the rules already find. Purpose baseline: "
         f"always `{NO_PURPOSE}`; the task must also beat the best constant answer. "
-        "Fields are compared by exact text.",
+        "Fields are compared by exact text. Boilerplate is found by rules in every run.",
     ]
     return "\n".join(out) + "\n"
 
