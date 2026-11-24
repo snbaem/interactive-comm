@@ -5,7 +5,7 @@ by default. Other settings:
 
 ``ICSEL_LLM_MIN_CONFIDENCE``  ignore suggestions below this (default 0.5)
 ``ICSEL_LLM_TASKS``           comma list of tasks (default ``classify,explain``)
-``ICSEL_LLM_<TASK>_SEND_TEXT``  ``1`` lets a task that sends letter text do so (``FIELDS``)
+``ICSEL_LLM_<TASK>_SEND_TEXT``  ``1`` lets ``FIELDS`` / ``PURPOSE`` send letter text
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ def get_assistant(
     max_calls: int | None = None,
     send_text: Collection[str] = (),
     cache: ReplyCache | None = None,
+    purposes: tuple[str, ...] | None = None,
 ) -> Assistant:
     """Return the configured assistant (the no-op one unless explicitly enabled).
 
@@ -54,6 +55,7 @@ def get_assistant(
         tasks: Comma list overriding ``ICSEL_LLM_TASKS``.
         max_calls: Hard cap on model calls for this run.
         send_text: Tasks allowed to send letter text, besides those allowed in ``env``.
+        purposes: Allowed purposes; ``None`` uses the bundled list.
         cache: Where validated replies are kept; ``None`` turns caching off.
 
     Raises:
@@ -87,4 +89,5 @@ def get_assistant(
         max_calls=max_calls,
         send_text=allowed,
         cache=cache,
+        purposes=purposes,
     )

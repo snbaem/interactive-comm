@@ -71,6 +71,10 @@ def analyze(
         info["fields"] = _with_drops(
             assistant, "fields", lambda ai: [f.to_dict() for f in ai.detect_fields(letter)], errors
         )
+    if "purpose" in tasks:
+        info["purpose"] = _with_drops(
+            assistant, "purpose", lambda ai: ai.tag_purpose(letter), errors
+        )
     if assistant.enabled:
         try:
             info["explanation"] = assistant.explain_fit(fit_facts(letter, results, changes))

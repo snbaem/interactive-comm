@@ -1,0 +1,4 @@
+{
+  "_comment": "Purposes for the optional 'purpose' AI task. Copy this file, edit the list and pass it with --purposes. 'other' is always available.",
+  "purposes": ["billing-notice", "confirmation", "statement", "reminder", "policy-update", "other"]
+}

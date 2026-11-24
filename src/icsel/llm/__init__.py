@@ -12,6 +12,7 @@ from .base import (
 )
 from .cache import ReplyCache, default_cache_dir
 from .fields import FieldSpan
+from .purpose import load_purposes
 from .registry import available_backends, get_assistant, register_backend
 
 __all__ = [
@@ -30,5 +31,6 @@ __all__ = [
     "default_cache_dir",
     "fit_facts",
     "get_assistant",
+    "load_purposes",
     "register_backend",
 ]

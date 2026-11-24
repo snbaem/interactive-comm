@@ -84,6 +84,7 @@ CSV_COLUMNS = [
     "duplicate_group",
     "ai_role_changes",
     "note",
+    "purpose",
 ]
 
 
@@ -116,6 +117,8 @@ class LetterRecord:
     ai_error: str = ""
     #: Variable fields found by the AI step (plain data, see :class:`icsel.llm.FieldSpan`).
     ai_fields: list[dict[str, Any]] = field(default_factory=list)
+    #: Purpose chosen by the AI step; empty when the task did not run.
+    ai_purpose: str = ""
     #: Where the letter's boxes sit against the chosen (or closest) layout, in inches.
     offsets: str = ""
 
@@ -308,6 +311,7 @@ class AiPlan:
     classify: list[LetterRecord]
     explain: list[LetterRecord]
     fields: list[LetterRecord] = field(default_factory=list)
+    purpose: list[LetterRecord] = field(default_factory=list)
     #: Number of proposed layouts to name (one call each).
     proposals: int = 0
 
@@ -318,7 +322,7 @@ class AiPlan:
 
     def jobs(self) -> list[list[LetterRecord]]:
         """The letters of every per-letter job, in the order the jobs run."""
-        return [self.classify, self.fields, self.explain]
+        return [self.classify, self.fields, self.purpose, self.explain]
 
     def letters(self) -> list[LetterRecord]:
         """Every letter with at least one job, once."""
@@ -330,7 +334,7 @@ def plan_ai(records: Iterable[LetterRecord], assistant: Assistant) -> AiPlan:
 
     * **Labeling** only for letters with at least one block the rules left ``unknown``.
     * **Explaining** only for letters that are ambiguous, weak or fit no layout.
-    * **Detecting fields** (opt-in) for every matched letter.
+    * **Detecting fields** and **tagging the purpose** (opt-in) for every matched letter.
 
     With the default tasks, letters that fit one layout cleanly make no call at all. The
     explain count is an upper bound, because labeling can resolve a weak fit before it is explained.
@@ -340,7 +344,8 @@ def plan_ai(records: Iterable[LetterRecord], assistant: Assistant) -> AiPlan:
     classify = [r for r in ok if "classify" in tasks and r.unknown_blocks > 0]
     explain = [r for r in ok if "explain" in tasks and (r.ambiguous or r.fit != FIT_GOOD)]
     fields = ok if "fields" in tasks else []
-    return AiPlan(classify, explain, list(fields))
+    purpose = ok if "purpose" in tasks else []
+    return AiPlan(classify, explain, list(fields), list(purpose))
 
 
 def run_ai(
@@ -364,6 +369,7 @@ def run_ai(
     classify_ids = {id(r) for r in plan.classify}
     explain_ids = {id(r) for r in plan.explain}
     field_ids = {id(r) for r in plan.fields}
+    purpose_ids = {id(r) for r in plan.purpose}
     ordered = plan.letters()
     ai: Any = assistant  # only tasks in the plan are run, so their methods exist
     failures_in_a_row = 0
@@ -385,6 +391,8 @@ def run_ai(
             if id(record) in field_ids:
                 spans = ai.detect_fields(letter)
                 record.ai_fields = [f.to_dict() for f in spans if f.kind == "variable"]
+            if id(record) in purpose_ids:
+                record.ai_purpose = ai.tag_purpose(letter)
             if id(record) in explain_ids and (record.ambiguous or record.fit != FIT_GOOD):
                 if tb is None:
                     tb = resolve_ties(
@@ -440,6 +448,7 @@ def write_csv(records: Iterable[LetterRecord], path: Path) -> Path:
                 "duplicate_group": r.duplicate_group,
                 "ai_role_changes": len(r.ai_changes) if r.ai_changes else "",
                 "note": r.note,
+                "purpose": r.ai_purpose,
             }
             writer.writerow({k: _csv_safe(v) for k, v in row.items()})
     return path
@@ -483,6 +492,21 @@ def _fields_section(records: Sequence[LetterRecord]) -> list[str]:
         return [*out, "No field name recurs across letters."]
     out += ["| Field name | Letters |", "|---|---:|"]
     return out + [f"| {name} | {count} |" for name, count in recurring]
+
+
+def _purpose_section(records: Sequence[LetterRecord]) -> list[str]:
+    """Table of purpose by layout (markdown lines)."""
+    tagged = [r for r in records if r.ai_purpose]
+    counts = Counter((r.ai_purpose, r.best_layout or "(no layout fits)") for r in tagged)
+    columns = sorted({layout for _, layout in counts})
+    out = ["", f"## Purpose by layout (AI, {len(tagged)} letter(s) tagged)", ""]
+    out.append("Letters with the same purpose in one column could share a template.")
+    out += ["", "| Purpose | " + " | ".join(columns) + " | Total |"]
+    out.append("|---|" + "---:|" * (len(columns) + 1))
+    for purpose in sorted({p for p, _ in counts}):
+        row = [counts[(purpose, c)] for c in columns]
+        out.append(f"| {purpose} | " + " | ".join(map(str, row)) + f" | {sum(row)} |")
+    return out
 
 
 def _md(name: str) -> str:
@@ -578,6 +602,9 @@ def write_markdown(
     out += extra_sections
     if any(r.ai_fields for r in records):
         out += _fields_section(records)
+
+    if any(r.ai_purpose for r in records):
+        out += _purpose_section(records)
 
     if ai_summary is not None:
         out += ["", "## AI step", ""]

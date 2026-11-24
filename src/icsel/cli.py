@@ -30,6 +30,7 @@ from .llm import (
     available_backends,
     default_cache_dir,
     get_assistant,
+    load_purposes,
 )
 from .llm.assistant import DEFAULT_TASKS, TASKS, TEXT_TASKS
 from .match import LOW_FIT_THRESHOLD, TIE_MARGIN, MatchResult
@@ -69,6 +70,7 @@ SENT = {
     "explain": "scores and layout facts",
     "propose": "geometry and layout ids of proposed layouts (no letter text)",
     "fields": "LETTER TEXT (everything except letterhead and footer, names and addresses included)",
+    "purpose": "LETTER TEXT (the subject line and the first body paragraph)",
 }
 
 
@@ -144,7 +146,9 @@ def _print_ai_result(llm: dict[str, Any]) -> None:
         found = [f for f in llm["fields"]["result"] if f["kind"] == "variable"]
         names = ", ".join(f["name"] for f in found)
         print(f"  AI: {len(found)} variable field(s): {names}")
-    for section in ("fields",):
+    if llm.get("purpose", {}).get("result"):
+        print(f"  AI: purpose {llm['purpose']['result']}")
+    for section in ("fields", "purpose"):
         dropped = llm.get(section, {}).get("dropped")
         if dropped:
             why = ", ".join(f"{k} {n}" for k, n in dropped.items())
@@ -331,6 +335,7 @@ def _assistant_from_args(args: argparse.Namespace) -> Assistant:
         tasks=args.ai_tasks,
         max_calls=args.max_calls,
         send_text=[t for t in TEXT_TASKS if getattr(args, f"{t}_send_text")],
+        purposes=load_purposes(args.purposes) if args.purposes else None,
         cache=None if args.no_ai_cache else ReplyCache(default_cache_dir()),
     )
 
@@ -369,9 +374,14 @@ def _portfolio_ai_step(
         f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
         "ambiguous, weak or no-fit letters"
         + (f", {len(plan.fields)} to detect fields" if plan.fields else "")
+        + (f", {len(plan.purpose)} to tag the purpose" if plan.purpose else "")
         + (f", {plan.proposals} to name proposed layouts" if plan.proposals else "")
         + "."
-        + ("" if plan.fields else " Letters that fit one layout cleanly make no call.")
+        + (
+            ""
+            if plan.fields or plan.purpose
+            else " Letters that fit one layout cleanly make no call."
+        )
     )
     if args.max_calls is not None and plan.calls > args.max_calls:
         print(f"  Capped at {args.max_calls} call(s) by --max-calls.")
@@ -532,6 +542,12 @@ def _add_ai_options(parser: argparse.ArgumentParser, llm_help: str) -> None:
             action="store_true",
             help=f"allow the '{task}' task to send letter text (off by default)",
         )
+    parser.add_argument(
+        "--purposes",
+        type=Path,
+        metavar="FILE",
+        help="purposes for the 'purpose' task (default: src/icsel/data/purposes.json)",
+    )
     parser.add_argument(
         "--no-ai-cache",
         action="store_true",

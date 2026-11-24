@@ -44,7 +44,7 @@ def build_result(
         "fidelity": APPROX_NOTE,
         "llm": llm or {"enabled": False},
     }
-    for section in ("fields",):  # present only when that AI task ran
+    for section in ("fields", "purpose"):  # present only when that AI task ran
         if llm and section in llm:
             doc["llm"] = {k: v for k, v in doc["llm"].items() if k != section}
             doc[section] = {**llm[section], "source": "llm"}

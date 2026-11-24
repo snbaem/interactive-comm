@@ -13,6 +13,8 @@ What is sent to the model:
 * **Detecting fields** (``fields``, off by default, needs its own opt-in): the text of
   every block except letterhead and footer. See :mod:`icsel.llm.fields`.
 
+* **Tagging the purpose** (``purpose``, off by default, needs its own opt-in): the subject
+  line and the first body paragraph.
 * **Naming proposed layouts** (``propose``, off by default): box geometry and layout ids.
   No letter text and no file names.
 
@@ -36,18 +38,19 @@ from .cache import ReplyCache
 from .fields import FIELDS_SCHEMA, FieldSpan, letter_blocks, parse_fields
 from .prompts import render_prompt, template_version
 from .propose import PROPOSE_SCHEMA, parse_proposal
+from .purpose import OTHER, load_purposes, parse_purpose, purpose_payload, purpose_schema
 
 #: Most characters of one unknown block's text that are sent.
 MAX_BLOCK_TEXT = 600
 #: Roles a letter has at most once (on page 1).
 SINGLE_ROLES = ("date", "address", "subject")
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
-TASKS = ("classify", "explain", "fields", "propose")
+TASKS = ("classify", "explain", "fields", "propose", "purpose")
 #: Jobs that run when AI is on and no task list is given.
 DEFAULT_TASKS = ("classify", "explain")
 
 #: Jobs that send letter body text. Each also needs its own opt-in switch.
-TEXT_TASKS = ("fields",)
+TEXT_TASKS = ("fields", "purpose")
 
 T = TypeVar("T")
 
@@ -211,6 +214,7 @@ class LLMAssistant:
         max_calls: int | None = None,
         send_text: Collection[str] = (),
         cache: ReplyCache | None = None,
+        purposes: tuple[str, ...] | None = None,
     ) -> None:
         unknown = set(tasks) - set(TASKS)
         if unknown:
@@ -226,6 +230,8 @@ class LLMAssistant:
         self.tasks = tuple(tasks)
         self.max_calls = max_calls
         self.cache = cache
+        #: Allowed purposes; only read when the task is on.
+        self.purposes = purposes or (load_purposes() if "purpose" in tasks else ())
         #: Model calls made, replies taken from the cache, and model items that were
         #: dropped by validation (``"task: reason"`` -> count).
         self.calls = 0
@@ -333,6 +339,20 @@ class LLMAssistant:
             ),
             FIELDS_SCHEMA,
             blocks=json.dumps(blocks, indent=1, ensure_ascii=False),
+        )
+
+    def tag_purpose(self, letter: LetterStructure) -> str:
+        """Ask for the letter's purpose, one of :attr:`purposes`. Sends letter text."""
+        payload = purpose_payload(letter)
+        if "purpose" not in self.tasks or not payload:
+            return OTHER
+        return self._ask(
+            "purpose",
+            "tag_purpose",
+            lambda raw: parse_purpose(raw, self.purposes, lambda why: self._drop("purpose", why)),
+            purpose_schema(self.purposes),
+            purposes=", ".join(self.purposes),
+            letter=json.dumps(payload, indent=1, ensure_ascii=False),
         )
 
     def propose_layout(self, facts: dict[str, Any]) -> dict[str, Any] | None:
