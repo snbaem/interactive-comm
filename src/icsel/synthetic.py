@@ -47,6 +47,17 @@ _SENTENCES = [
 ADDRESSES = {
     "short": ["Alex Sample", "42 Placeholder Lane", "Riverton ZZ 00001"],
     "medium": ["Jordan Example", "Unit 7", "18 Fictional Road", "Riverton ZZ 00002"],
+    "long9": [
+        "Taylor Placeholder",
+        "c/o Sample Estates Management Ltd",
+        "Attn: Accounts Payable Department",
+        "Building D, Floor 3, Suite 310",
+        "2400 Imaginary Boulevard East",
+        "Northside Industrial District",
+        "Riverton ZZ 00004",
+        "Account 0000-0009",
+        "Reference 0000-0009-A",
+    ],
     "long7": [
         "Morgan Testperson",
         "c/o Sample Property Services",
@@ -90,6 +101,10 @@ class LetterSpec:
     subject_bold: bool = True
     salutation: str = "Dear Customer,"
     body: list[str] | None = None  # explicit paragraphs; None = generated from a seed
+    #: Table-like block (header row first) drawn under the salutation; the rules cannot label it.
+    table: list[list[str]] | None = None
+    #: True for a letter that is meant to fit no bundled layout (manifest has no expected layout).
+    fits_none: bool = False
     closing: str = "Kind regards,"
     signer: list[str] = field(
         default_factory=lambda: ["Riley Placeholder", "Customer Care, Brightwater Utilities"]
@@ -145,6 +160,90 @@ LETTERS: list[LetterSpec] = [
         paragraphs=14,
         seed=6,
         note="Seven-line address and a body that runs onto page 2.",
+    ),
+    LetterSpec(
+        "L07-no-date",
+        "classic-left",
+        ADDRESSES["medium"],
+        "Confirmation of your direct debit",
+        date=None,
+        seed=7,
+        note="Edge case: no date block at all.",
+    ),
+    LetterSpec(
+        "L08-two-line-subject",
+        "classic-left",
+        ADDRESSES["short"],
+        "Notice of a change to the billing period and payment dates for account 0000-0008",
+        seed=8,
+        note="Edge case: the subject wraps to two lines.",
+    ),
+    LetterSpec(
+        "L09-four-line-subject",
+        "subject-right",
+        ADDRESSES["medium"],
+        "Important information about the scheduled replacement of the shared service "
+        "pipe serving the Fictional Road and Imaginary Boulevard area",
+        seed=9,
+        note="Edge case: a four-line subject in the right-hand box.",
+    ),
+    LetterSpec(
+        "L10-very-long-address",
+        "tall-address",
+        ADDRESSES["long9"],
+        "Statement for your business account",
+        seed=10,
+        note="Edge case: nine address lines, the most any bundled layout holds.",
+    ),
+    LetterSpec(
+        "L11-three-page-body",
+        "classic-left",
+        ADDRESSES["short"],
+        "Your complete service terms",
+        paragraphs=34,
+        seed=11,
+        note="Edge case: the body runs onto a third page.",
+    ),
+    LetterSpec(
+        "L12-table-block",
+        "classic-left",
+        ADDRESSES["short"],
+        "Summary of charges this quarter",
+        table=[
+            ["Service", "Period", "Amount"],
+            ["Water", "Jan - Mar", "$41.20"],
+            ["Power", "Jan - Mar", "$88.75"],
+            ["Standing charge", "Jan - Mar", "$12.00"],
+        ],
+        seed=12,
+        note="Edge case: a table-like block in the body that the rules cannot label.",
+    ),
+    LetterSpec(
+        "L13-subject-right-lower",
+        "subject-right",
+        ADDRESSES["short"],
+        "Planned maintenance in your area next month",
+        offsets={"subject": (0.0, 40.0)},
+        seed=13,
+        note="Edge case: subject on the right like subject-right, but 40 pt lower than its box.",
+    ),
+    LetterSpec(
+        "L14-no-layout-fits",
+        "classic-left",
+        ADDRESSES["long9"],
+        "Statement for your business account (corrected)",
+        offsets={"address": (140.0, 90.0), "subject": (0.0, 70.0), "date": (-300.0, 120.0)},
+        seed=14,
+        note="Edge case: address, subject and date are placed where no bundled layout has boxes.",
+        fits_none=True,
+    ),
+    LetterSpec(
+        "L15-address-right",
+        "address-right",
+        ADDRESSES["medium"],
+        "Your water meter has been replaced",
+        seed=15,
+        note="Baseline letter for address-right.",
     ),
 ]
 
@@ -216,6 +315,15 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
 
     body = _zone(layout, "body", spec)
     top = _draw_lines(c, page_h, body.x, body.y, [spec.salutation]) + PARA_GAP
+    if spec.table:
+        c.setFont(FONT_BOLD, 9)
+        for i, text in enumerate(spec.table[0]):
+            c.drawString(body.x + i * 130, _baseline(page_h, top, 9), text)
+        c.setFont(FONT, 9)
+        for r, row in enumerate(spec.table[1:], start=1):
+            for i, text in enumerate(row):
+                c.drawString(body.x + i * 130, _baseline(page_h, top + r * 13, 9), text)
+        top += len(spec.table) * 13 + PARA_GAP
     paragraphs = spec.body if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
     blocks = [simpleSplit(p, FONT, SIZE, body.width) for p in paragraphs]
     blocks.append([spec.closing])
@@ -257,7 +365,13 @@ def generate(
     manifest = []
     for spec in letters or LETTERS:
         pdf = render_letter(spec, by_id[spec.layout], out_dir / f"{spec.id}.pdf")
-        manifest.append({"file": pdf.name, "expected_layout": spec.layout, "note": spec.note})
+        manifest.append(
+            {
+                "file": pdf.name,
+                "expected_layout": None if spec.fits_none else spec.layout,
+                "note": spec.note,
+            }
+        )
     path = out_dir / "manifest.json"
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path

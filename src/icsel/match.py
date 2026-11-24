@@ -30,17 +30,20 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from .config import DEFAULT_CONFIG, ScoringConfig
 from .extract import Block, LetterStructure
 from .profile import LayoutProfile, Zone
 
-ROLE_WEIGHTS: dict[str, float] = {"address": 3.0, "subject": 3.0, "date": 1.0, "body": 2.0}
-POSITION_SCALE = 72.0  # points; a block one inch away from its zone gets zero closeness
-CLOSENESS_SHARE = 0.6
-WIDTH_TOLERANCE = 18.0  # points
+# Defaults, kept as module constants for callers that import them. The matcher itself
+# reads a ScoringConfig (see config.py and data/scoring.json) and falls back to these.
+ROLE_WEIGHTS: dict[str, float] = DEFAULT_CONFIG.role_weights
+POSITION_SCALE = DEFAULT_CONFIG.position_scale  # a block this far (pt) from its zone: 0 closeness
+CLOSENESS_SHARE = DEFAULT_CONFIG.closeness_share
+WIDTH_TOLERANCE = DEFAULT_CONFIG.width_tolerance  # points
 #: Below this best score the UI suggests previewing other layouts.
-LOW_FIT_THRESHOLD = 0.8
+LOW_FIT_THRESHOLD = DEFAULT_CONFIG.low_fit_threshold
 #: Fitting layouts within this score of the best one count as a near-tie.
-TIE_MARGIN = 0.05
+TIE_MARGIN = DEFAULT_CONFIG.tie_margin
 #: Roles whose box capacity (``max_lines``) counts towards "unused capacity".
 CAPACITY_ROLES = ("address", "subject", "date")
 
@@ -104,20 +107,23 @@ def _overlap_fraction(block: Block, zone: Zone) -> float:
     return min(1.0, (ix * iy) / area)
 
 
-def _hard_checks(role: str, block: Block, zone: Zone) -> list[str]:
+def _hard_checks(role: str, block: Block, zone: Zone, tolerance: float) -> list[str]:
     failures = []
     if zone.max_lines is not None and block.line_count > zone.max_lines:
         failures.append(f"{role} has {block.line_count} lines; layout allows {zone.max_lines}")
-    if block.width > zone.width + WIDTH_TOLERANCE:
+    if block.width > zone.width + tolerance:
         failures.append(f"{role} is {block.width:.0f} pt wide; zone is {zone.width:.0f} pt")
     return failures
 
 
-def score_layout(letter: LetterStructure, layout: LayoutProfile) -> MatchResult:
-    """Score ``letter`` against one ``layout``."""
+def score_layout(
+    letter: LetterStructure, layout: LayoutProfile, config: ScoringConfig | None = None
+) -> MatchResult:
+    """Score ``letter`` against one ``layout`` (``config`` defaults to the bundled settings)."""
+    cfg = config or DEFAULT_CONFIG
     roles: list[RoleScore] = []
     failures: list[str] = []
-    for role in ROLE_WEIGHTS:
+    for role in cfg.role_weights:
         zone = layout.zone(role)
         block = letter.region(role)
         if block is None and zone is None:
@@ -132,21 +138,23 @@ def score_layout(letter: LetterStructure, layout: LayoutProfile) -> MatchResult:
             roles.append(RoleScore(role, 0.0, note="layout has no such zone"))
             continue
         dx, dy = block.x - zone.x, block.y - zone.y
-        closeness = max(0.0, 1.0 - math.hypot(dx, dy) / POSITION_SCALE)
+        closeness = max(0.0, 1.0 - math.hypot(dx, dy) / cfg.position_scale)
         overlap = _overlap_fraction(block, zone)
         if role != "body":  # body length varies by letter; capacity is checked by page flow
-            failures.extend(_hard_checks(role, block, zone))
-        s = CLOSENESS_SHARE * closeness + (1 - CLOSENESS_SHARE) * overlap
+            failures.extend(_hard_checks(role, block, zone, cfg.width_tolerance))
+        s = cfg.closeness_share * closeness + (1 - cfg.closeness_share) * overlap
         roles.append(RoleScore(role, s, dx, dy, closeness, overlap))
-    scored = [(ROLE_WEIGHTS[r.role], r.score) for r in roles if r.score is not None]
+    scored = [(cfg.role_weights[r.role], r.score) for r in roles if r.score is not None]
     total_w = sum(w for w, _ in scored)
     total = sum(w * sc for w, sc in scored) / total_w if total_w else 0.0
     return MatchResult(layout.id, layout.name, total, not failures, failures, roles)
 
 
-def rank(letter: LetterStructure, layouts: list[LayoutProfile]) -> list[MatchResult]:
+def rank(
+    letter: LetterStructure, layouts: list[LayoutProfile], config: ScoringConfig | None = None
+) -> list[MatchResult]:
     """Score every layout; fitting layouts first, then by descending score."""
-    results = [score_layout(letter, lay) for lay in layouts]
+    results = [score_layout(letter, lay, config) for lay in layouts]
     return sorted(results, key=lambda r: (not r.fits, -r.score, r.layout_id))
 
 

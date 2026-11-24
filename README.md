@@ -199,9 +199,10 @@ reports are still written.
 
 | Command | What it does |
 | --- | --- |
-| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--out DIR`, `-r/--recursive`, `--llm BACKEND`. |
+| `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--config FILE` (scoring settings, defaults in `src/icsel/data/scoring.json`), `--dimensions`, `--units`, `--out DIR`, `-r/--recursive`, `--llm BACKEND`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
-| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--llm BACKEND`, `--yes`. |
+| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--config`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--llm BACKEND`, `--yes`. |
+| `icsel show-layout LAYOUT` | Draw a layout with distances from the top and left edges, page margins, gaps between zones, sizes and line capacities. `--units in\|cm\|pt`, `--format pdf\|png\|both`, `--compare OTHER` (side by side), `--diff` (overlay `--compare` or `--letter PDF` and list differences), `--json`. `match --dimensions` does the same for each letter's best layout. |
 | `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`, `--llm`). |
 | `icsel samples` | Generate the synthetic Brightwater Utilities letters (`--out`, default `samples/letters`). With `--portfolio`, generate the 40-file demo folder for `icsel portfolio` instead (default `samples/portfolio`). |
 
@@ -221,7 +222,7 @@ reports it and moves on to the next file.
 3. `render.py` draws the letter's text into the winning layout's zones with
    reportlab.
 
-Layout profiles are JSON files. Measurements are in points, from the top-left
+Layout profiles are JSON files, validated on load (schema: `src/icsel/data/layout-profile.schema.json`). Measurements are in points, from the top-left
 corner of the page. The bundled examples are in
 [`src/icsel/data/layouts/`](src/icsel/data/layouts/classic-left.json).
 

@@ -279,10 +279,11 @@ def test_handles_more_than_a_hundred_pdfs(
             shutil.copy(src, tmp_path / f"c{n:02d}-{src.name}")
     seen: list[tuple[int, int]] = []
     recs = scan(sorted(tmp_path.glob("*.pdf")), layouts, progress=lambda i, t: seen.append((i, t)))
-    assert len(recs) == 120 and all(r.status == "ok" for r in recs)
-    assert seen[-1] == (120, 120)
+    total = len(sources) * 20
+    assert len(recs) == total and all(r.status == "ok" for r in recs)
+    assert seen[-1] == (total, total)
     groups = find_duplicate_groups(recs)
-    assert sum(len(g.members) for g in groups) == 120  # every copy has twins
+    assert sum(len(g.members) for g in groups) == total  # every copy has twins
 
 
 # ------------------------------------------------------------------ the economical AI step
@@ -370,6 +371,11 @@ def test_ai_step_with_nothing_to_ask_makes_no_call(
 ) -> None:
     backend = FakeBackend()
     register_backend("fake-quiet", lambda env: backend)
-    assert main(["portfolio", str(letters_dir), "--llm", "fake-quiet", "--out", str(tmp_path)]) == 0
+    clean = tmp_path / "clean"  # only the baseline letters: nothing for the AI to label or explain
+    clean.mkdir()
+    for name in ("L01-classic", "L03-subject-right", "L05-tall-address-8", "L15-address-right"):
+        shutil.copy(letters_dir / f"{name}.pdf", clean)
+    argv = ["portfolio", str(clean), "--llm", "fake-quiet", "--out", str(tmp_path / "out")]
+    assert main(argv) == 0
     assert "up to 0 model call(s)" in capsys.readouterr().out
     assert backend.calls == []
