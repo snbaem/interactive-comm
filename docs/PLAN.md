@@ -78,6 +78,7 @@ Off by default, provider-agnostic, no network in tests.
 | --- | --- | --- |
 | 0 | `icsel eval` and `truth.json` | Done |
 | 1 | `fields` task, `fields.csv`, reply cache | Done |
+| 1b | Shared-text discovery (rules, `--shared-text`) and `fragments` task | Done |
 | 2 | Layout proposals (rules) and `propose` task | Done |
 | 3 | `purpose` task and purpose-by-layout table | Done |
 | 4 | `explain` only for weak fits, near-ties and no-fits | Done |
@@ -93,6 +94,11 @@ Known limits of the benchmark: the letters are synthetic and short; block roles 
 almost all right (the rules label nearly every block), so `classify` has little room to
 improve them; the field truth follows simple patterns; the rules-only purpose baseline is
 always `other`, so the `purpose` task must also beat the best constant answer.
+
+Shared text is off unless `--shared-text` or the `fragments` task asks for it, so the default
+portfolio report is unchanged. On the sample letters it finds all planted boilerplate (recall
+1.0) with a precision of 0.93: the extras are random sample paragraphs that share two of
+their three sentences.
 
 **Design note: step 5, rendered-sample check (not built).** The condition was that the
 benchmark shows problems the text checks miss. No benchmark run with a real model exists, so
