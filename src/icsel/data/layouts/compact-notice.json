@@ -1,0 +1,15 @@
+{
+  "profile_version": 1,
+  "id": "compact-notice",
+  "name": "Compact notice",
+  "description": "Short address box high on the page (up to 4 lines) and a one-line subject, leaving a long body area for notices. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 504, "height": 54},
+    {"role": "date", "x": 396, "y": 100, "width": 162, "height": 16, "max_lines": 1},
+    {"role": "address", "x": 72, "y": 100, "width": 252, "height": 52, "max_lines": 4, "required": true},
+    {"role": "subject", "x": 72, "y": 176, "width": 468, "height": 16, "max_lines": 1},
+    {"role": "body", "x": 72, "y": 212, "width": 468, "height": 508},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}

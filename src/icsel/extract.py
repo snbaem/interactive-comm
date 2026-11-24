@@ -90,6 +90,10 @@ class ExtractionError(RuntimeError):
     """Raised when a PDF cannot be read or contains no extractable text."""
 
 
+class NoTextError(ExtractionError):
+    """The PDF opened fine but has no text layer (for example a scanned image)."""
+
+
 @dataclass
 class Block:
     """A rectangular group of text lines, in points, top-left origin."""
@@ -396,7 +400,7 @@ def extract(pdf_path: Path) -> LetterStructure:
                 words = [w for w in words if not _is_icsel_mark(w)]
             structure.blocks.extend(_blocks(_segments(words), i) if words else [])
     if not structure.blocks:
-        raise ExtractionError(f"{pdf_path}: no extractable text (scanned or image-only PDF?)")
+        raise NoTextError(f"{pdf_path}: no extractable text (scanned or image-only PDF?)")
     structure.blocks.sort(key=lambda b: (b.page, b.y, b.x))
     _classify(structure.blocks, structure.page_height)
     return structure

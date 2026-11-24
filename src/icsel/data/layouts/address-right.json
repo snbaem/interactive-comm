@@ -1,0 +1,15 @@
+{
+  "profile_version": 1,
+  "id": "address-right",
+  "name": "Address box right",
+  "description": "Address box on the right (window-envelope position), date and subject on the left. Synthetic layout for Brightwater Utilities.",
+  "page": {"width": 612, "height": 792, "units": "pt"},
+  "zones": [
+    {"role": "letterhead", "x": 54, "y": 36, "width": 504, "height": 54},
+    {"role": "date", "x": 72, "y": 150, "width": 180, "height": 16, "max_lines": 1},
+    {"role": "address", "x": 324, "y": 108, "width": 216, "height": 86, "max_lines": 6, "required": true},
+    {"role": "subject", "x": 72, "y": 214, "width": 468, "height": 30, "max_lines": 2},
+    {"role": "body", "x": 72, "y": 262, "width": 468, "height": 458},
+    {"role": "footer", "x": 54, "y": 750, "width": 504, "height": 24}
+  ]
+}

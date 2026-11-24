@@ -47,3 +47,6 @@ jobs:
       - run: icsel samples --out samples/letters
       - run: icsel match samples/letters --out out
       - run: icsel profile samples/letters/L01-classic.pdf
+      - run: icsel show-layout classic-left --compare subject-right --out out/layouts
+      - run: icsel portfolio samples/letters --out out/portfolio
+      - run: icsel samples --portfolio --out samples/portfolio

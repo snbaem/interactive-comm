@@ -12,6 +12,9 @@ def test_best_layout_is_planted_layout(
 ) -> None:
     for entry in manifest:
         best = rank(extract(letters_dir / entry["file"]), layouts)[0]
+        if entry["expected_layout"] is None:  # the "fits no layout" edge case
+            assert not best.fits, entry["file"]
+            continue
         assert best.layout_id == entry["expected_layout"], entry["file"]
         assert best.fits, entry["file"]
 

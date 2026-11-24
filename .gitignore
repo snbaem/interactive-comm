@@ -24,6 +24,7 @@ htmlcov/
 out/
 profiles/
 samples/letters/
+samples/portfolio/
 
 # OS / editor
 .DS_Store

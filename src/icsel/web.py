@@ -44,6 +44,7 @@ from urllib.parse import parse_qs, urlsplit
 import pdfplumber
 
 from . import __version__
+from .explain import explain_ranking
 from .extract import ExtractionError, LetterStructure, extract
 from .llm import (
     Assistant,
@@ -58,7 +59,7 @@ from .match import LOW_FIT_THRESHOLD, MatchResult
 from .pipeline import analyze
 from .profile import LayoutProfile, load_profiles
 from .render import overflows, plan_placement, render_sample
-from .report import APPROX_NOTE, build_result
+from .report import APPROX_NOTE, build_result, dimensions_doc
 from .synthetic import generate
 
 #: First port tried when none is given.
@@ -280,7 +281,14 @@ class App:
         with self._lock:
             self.runs[run_id] = run
         sample_info = self.render(run_id, results[0].layout_id)
-        result_doc = build_result(letter, results, Path(sample_info["file"]), analysis.llm)
+        result_doc = build_result(
+            letter,
+            results,
+            Path(sample_info["file"]),
+            analysis.llm,
+            explanation=explain_ranking(letter, self.layouts, results),
+            dimensions=dimensions_doc(letter, self.by_id[results[0].layout_id]),
+        )
         (folder / "result.json").write_text(json.dumps(result_doc, indent=2) + "\n", "utf-8")
         return self._payload(run, sample_info)
 
