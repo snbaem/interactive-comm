@@ -81,7 +81,7 @@ busy, it uses the next free one and prints the address. You can:
   made in scores close to 1.0.
 
 The server uses only the Python standard library. It listens on `127.0.0.1` and
-makes no outbound calls. Uploads and results go to `out/web/`. Stop it with
+makes no outbound calls unless you turn on the AI step. Uploads and results go to `out/web/`. Stop it with
 Ctrl+C. Do not expose it with `--host 0.0.0.0` on a shared network: it has no
 authentication.
 
@@ -98,6 +98,15 @@ It is off unless you turn it on, and it never changes what the rules already
 labeled. It only fills gaps: no second address, date or subject, and only above a
 confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
 the result JSON and with an **AI** badge in the browser UI.
+
+**In the browser UI:** install the extra (`python -m pip install -e ".[llm]"`), run
+`icsel serve --open`, and switch on **Use AI** under *AI settings*. Enter your API key and
+choose whether letter text may be sent (off by default: the AI then only explains scores).
+*Turn on* checks the key without sending letter data. The key is kept in memory until
+icsel stops; it is never written to disk or sent back to the browser. *Forget key* removes
+it sooner. The settings are locked when icsel listens on a non-loopback address.
+
+**On the command line**, or to start the UI with AI already on:
 
 ```powershell
 python -m pip install -e ".[llm]"          # example backend: Claude via the Anthropic SDK
@@ -129,7 +138,7 @@ See [`src/icsel/prompts/`](src/icsel/prompts/README.md) for the prompt templates
 **Other providers:** the AI step is written against a one-method interface
 (`CompletionBackend.complete(system, prompt, json_schema)` in
 [`icsel/llm/base.py`](src/icsel/llm/base.py)). To add a provider, implement it and
-call `icsel.llm.register_backend("name", factory)`. Prompts, data minimization and
+call `icsel.llm.register_backend("name", factory, api_key_env="NAME_API_KEY")`. Prompts, data minimization and
 guard rails are shared. Tests use a fake backend and never touch the network.
 
 ## Commands

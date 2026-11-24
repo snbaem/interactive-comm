@@ -121,3 +121,33 @@ def test_page_script_parses(tmp_path: Path) -> None:
     js.write_text(script.group(1), encoding="utf-8")
     result = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_upload_note_matches_what_the_ai_step_sends() -> None:
+    """The page may only promise that files stay local when the AI step is off."""
+    import re
+    import shutil
+    import subprocess
+
+    from icsel import web
+
+    html = (Path(web.__file__).parent / "data" / "web" / "index.html").read_text(encoding="utf-8")
+    assert html.count("Files stay on this computer") == 1  # only inside privacyNote
+    func = re.search(r"^function privacyNote\(.*?^}", html, re.S | re.M)
+    assert func is not None
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed")
+
+    def note(llm: dict) -> str:
+        script = f"{func.group(0)}\nconsole.log(privacyNote({json.dumps(llm)}));"
+        return subprocess.run(
+            [node, "-e", script], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    on = {"enabled": True, "backend": "fake"}
+    assert note({"enabled": False}) == "Files stay on this computer."
+    both = note({**on, "tasks": ["classify", "explain"]})
+    assert "text the rules cannot label" in both and "sent to fake" in both
+    explain = note({**on, "tasks": ["explain"]})
+    assert "No letter text is sent" in explain and "sent to fake" in explain

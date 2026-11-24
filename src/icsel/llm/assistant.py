@@ -208,6 +208,12 @@ class LLMAssistant:
             "tasks": list(self.tasks),
         }
 
+    def check(self) -> None:
+        """Verify the backend's credentials, if it can do so (raises ``LLMError``)."""
+        check = getattr(self.backend, "check", None)
+        if check is not None:
+            check()
+
     def classify_unknown(self, letter: LetterStructure) -> list[Suggestion]:
         """Ask the model about ``unknown`` blocks. No call is made if there are none."""
         if "classify" not in self.tasks:

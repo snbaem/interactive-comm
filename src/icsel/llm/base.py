@@ -25,6 +25,10 @@ class LLMError(RuntimeError):
     """The AI step failed or is misconfigured. Matching continues without it."""
 
 
+class LLMAuthError(LLMError):
+    """The provider has no usable credentials (missing, wrong or not permitted)."""
+
+
 @runtime_checkable
 class CompletionBackend(Protocol):
     """Transport to one model provider."""

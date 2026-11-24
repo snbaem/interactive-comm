@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,6 +13,7 @@ import pytest
 from icsel.extract import Block, LetterStructure, extract
 from icsel.llm import (
     LLMAssistant,
+    LLMAuthError,
     LLMError,
     NoOpAssistant,
     Suggestion,
@@ -313,6 +316,94 @@ def test_anthropic_backend_request_shape_with_real_sdk() -> None:
     seen["next_reply"] = reply("", stop="refusal")
     with pytest.raises(LLMError, match="declined"):
         backend.complete("sys", "user")
+
+
+def test_anthropic_backend_missing_credentials_does_not_stop_matching(
+    tmp_path: Path, layouts: list[LayoutProfile], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a key the SDK raises TypeError; icsel must record it and still rank."""
+    anthropic = pytest.importorskip("anthropic")
+    httpx2 = pytest.importorskip("httpx2")
+    for name in list(os.environ):
+        if name.startswith("ANTHROPIC_"):
+            monkeypatch.delenv(name)
+    for name in ("APPDATA", "HOME", "USERPROFILE"):  # ignore any login profile on this machine
+        monkeypatch.setenv(name, str(tmp_path))
+
+    def handler(request: Any) -> Any:
+        raise AssertionError("no request may be sent without credentials")
+
+    client = anthropic.Anthropic(
+        base_url="http://testserver.invalid",
+        http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(handler)),
+        max_retries=0,
+    )
+    backend = AnthropicBackend(client=client)
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
+        backend.complete("sys", "user")
+
+    analysis = analyze(_letter(), layouts, LLMAssistant(backend))
+    assert analysis.results
+    assert any("ANTHROPIC_API_KEY" in err for err in analysis.llm["errors"])
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "match"),
+    [
+        (200, None, ""),
+        (401, LLMAuthError, "rejected the API key"),
+        (403, LLMAuthError, "not permitted"),
+        (500, LLMError, "API call failed"),
+    ],
+)
+def test_anthropic_backend_check_sends_no_letter_data(
+    status: int, error: type[LLMError] | None, match: str
+) -> None:
+    anthropic = pytest.importorskip("anthropic")
+    httpx2 = pytest.importorskip("httpx2")
+    requests: list[Any] = []
+
+    def handler(request: Any) -> Any:
+        requests.append(request)
+        if status != 200:
+            detail = {"type": "error", "error": {"type": "x", "message": "no"}}
+            return httpx2.Response(status, json=detail)
+        model = {"id": "claude-opus-5-5", "type": "model", "display_name": "x"}
+        return httpx2.Response(200, json={**model, "created_at": "2026-01-01T00:00:00Z"})
+
+    client = anthropic.Anthropic(
+        api_key="test-key-not-real",
+        base_url="http://testserver.invalid",
+        http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(handler)),
+    )
+    backend = AnthropicBackend(client=client)
+    if error is None:
+        backend.check()
+    else:
+        with pytest.raises(error, match=match) as caught:
+            backend.check()
+        assert type(caught.value) is error
+    assert len(requests) == 1  # no retries: the settings form is waiting
+    assert requests[0].method == "GET" and not requests[0].content
+
+
+def test_anthropic_backend_takes_key_from_env_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-environment")
+    backend = AnthropicBackend.from_env({"ANTHROPIC_API_KEY": "from-settings"})
+    assert backend.client.api_key == "from-settings"
+
+
+def test_anthropic_backend_does_not_hide_other_type_errors() -> None:
+    pytest.importorskip("anthropic")  # without the SDK every exception counts as an API error
+
+    class Messages:
+        def create(self, **kwargs: Any) -> Any:
+            raise TypeError("unexpected keyword argument 'nope'")
+
+    client = SimpleNamespace(beta=SimpleNamespace(messages=Messages()))
+    with pytest.raises(TypeError, match="nope"):
+        AnthropicBackend(client=client).complete("sys", "user")
 
 
 def test_anthropic_backend_settings_from_env() -> None:
