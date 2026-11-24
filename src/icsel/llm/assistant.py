@@ -13,6 +13,9 @@ What is sent to the model:
 * **Detecting fields** (``fields``, off by default, needs its own opt-in): the text of
   every block except letterhead and footer. See :mod:`icsel.llm.fields`.
 
+* **Naming proposed layouts** (``propose``, off by default): box geometry and layout ids.
+  No letter text and no file names.
+
 What the model may change (:func:`apply_suggestions`): only blocks the rules left
 ``unknown``, only to a known role, only above a confidence threshold, and never a
 second date, address or subject on page 1. Rule-based roles are never overridden.
@@ -32,13 +35,14 @@ from .base import CompletionBackend, LLMCallLimit, LLMError, RoleChange, Suggest
 from .cache import ReplyCache
 from .fields import FIELDS_SCHEMA, FieldSpan, letter_blocks, parse_fields
 from .prompts import render_prompt, template_version
+from .propose import PROPOSE_SCHEMA, parse_proposal
 
 #: Most characters of one unknown block's text that are sent.
 MAX_BLOCK_TEXT = 600
 #: Roles a letter has at most once (on page 1).
 SINGLE_ROLES = ("date", "address", "subject")
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
-TASKS = ("classify", "explain", "fields")
+TASKS = ("classify", "explain", "fields", "propose")
 #: Jobs that run when AI is on and no task list is given.
 DEFAULT_TASKS = ("classify", "explain")
 
@@ -329,6 +333,18 @@ class LLMAssistant:
             ),
             FIELDS_SCHEMA,
             blocks=json.dumps(blocks, indent=1, ensure_ascii=False),
+        )
+
+    def propose_layout(self, facts: dict[str, Any]) -> dict[str, Any] | None:
+        """Ask for a name and rationale for a draft layout. Sends geometry only."""
+        if "propose" not in self.tasks:
+            return None
+        return self._ask(
+            "propose",
+            "propose_layout",
+            lambda raw: parse_proposal(raw, lambda why: self._drop("propose", why)),
+            PROPOSE_SCHEMA,
+            facts=json.dumps(facts, indent=1),
         )
 
     def explain_fit(self, facts: dict[str, Any]) -> str | None:

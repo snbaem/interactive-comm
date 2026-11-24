@@ -48,6 +48,13 @@ from .portfolio import (
     write_markdown,
 )
 from .profile import LayoutProfile, ProfileError, Zone, default_layouts_dir, load_profiles
+from .proposals import (
+    Proposal,
+    describe_with_ai,
+    proposals_markdown,
+    propose,
+    write_proposals,
+)
 from .render import render_sample
 from .report import APPROX_NOTE, build_result, dimensions_doc
 from .synthetic import generate, generate_portfolio
@@ -60,6 +67,7 @@ EXIT_USAGE = 2
 SENT = {
     "classify": "the text of blocks the rules could not label, plus layout facts",
     "explain": "scores and layout facts",
+    "propose": "geometry and layout ids of proposed layouts (no letter text)",
     "fields": "LETTER TEXT (everything except letterhead and footer, names and addresses included)",
 }
 
@@ -350,15 +358,18 @@ def _portfolio_ai_step(
     records: list[LetterRecord],
     layouts: list[LayoutProfile],
     settings: Settings,
+    proposals: Sequence[Proposal] = (),
 ) -> dict[str, Any]:
     """Plan, estimate, confirm and run the AI step; return the summary for the report."""
     _print_ai_notice(assistant)
     plan = plan_ai(records, assistant)
+    plan.proposals = len(proposals) if "propose" in getattr(assistant, "tasks", ()) else 0
     print(
         f"AI step plan: up to {plan.calls} model call(s) for {len(records)} letter(s): "
         f"{len(plan.classify)} to label unknown blocks, {len(plan.explain)} to explain "
         "ambiguous, weak or no-fit letters"
         + (f", {len(plan.fields)} to detect fields" if plan.fields else "")
+        + (f", {plan.proposals} to name proposed layouts" if plan.proposals else "")
         + "."
         + ("" if plan.fields else " Letters that fit one layout cleanly make no call.")
     )
@@ -371,6 +382,8 @@ def _portfolio_ai_step(
         print("Skipped the AI step; the report is rule-based only.")
         return {"line": "- Skipped (not confirmed); the report is rule-based only."}
     stopped = run_ai(plan, layouts, assistant, settings, _progress("AI"))
+    if plan.proposals and not stopped:
+        stopped = describe_with_ai(proposals, assistant)
     info = assistant.describe()
     line = f"- Ran {info['backend']} / {info['model']} on {len(plan.letters())} letter(s)."
     return {"line": line, "stopped": stopped, "details": _ai_details(assistant)}
@@ -392,15 +405,30 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     records = scan(paths, layouts, settings, _progress("matched"))
     groups = find_duplicate_groups(records, settings.duplicate_threshold)
 
+    # Computed from the rule-based result, before any AI step.
+    proposals: list[Proposal] = []
+    alone: list[LetterRecord] = []
+    want_proposals = args.proposals or "propose" in getattr(assistant, "tasks", ())
+    if want_proposals:
+        proposals, alone = propose(records, layouts, scoring)
+
     ai_summary: dict[str, Any] | None = None
     if assistant.enabled:
-        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings)
+        ai_summary = _portfolio_ai_step(args, assistant, records, layouts, settings, proposals)
 
     out: Path = args.out
+    sections: list[str] = []
+    if want_proposals:
+        write_proposals(proposals, out / "proposals")
+        sections = proposals_markdown(proposals, alone, scoring)
+        total = len(alone) + sum(len(p.members) for p in proposals)
+        print(f"Proposed {len(proposals)} layout(s) from {total} weak or no-fit letter(s).")
     csv_path = write_csv(records, out / "portfolio.csv")
     if any(r.ai_fields for r in records):
         print(f"Wrote {write_fields_csv(records, out / 'fields.csv')}")
-    md_path = write_markdown(records, groups, layouts, settings, out / "portfolio.md", ai_summary)
+    md_path = write_markdown(
+        records, groups, layouts, settings, out / "portfolio.md", ai_summary, sections
+    )
     matched = sum(1 for r in records if r.status == STATUS_OK)
     unreadable = len(records) - matched
     print(f"Scanned {len(records)} PDF(s): {matched} matched, {unreadable} unreadable or no text.")
@@ -645,6 +673,12 @@ def build_parser() -> argparse.ArgumentParser:
         f"(default: {DUPLICATE_THRESHOLD})",
     )
     _add_ai_options(po, llm_help)
+    po.add_argument(
+        "--proposals",
+        action="store_true",
+        help="also draft new layouts from clusters of weak and no-fit letters (no model needed; "
+        "implied by the 'propose' AI task)",
+    )
     po.add_argument(
         "--yes",
         action="store_true",

@@ -94,9 +94,7 @@ def distance(a: Geometry, b: Geometry) -> float:
     roles = [r for r in SIGNATURE_ROLES if r in a.boxes]
     if not roles or roles != [r for r in SIGNATURE_ROLES if r in b.boxes]:
         return math.inf
-    return max(
-        math.hypot(a.boxes[r].x - b.boxes[r].x, a.boxes[r].y - b.boxes[r].y) for r in roles
-    )
+    return max(math.hypot(a.boxes[r].x - b.boxes[r].x, a.boxes[r].y - b.boxes[r].y) for r in roles)
 
 
 def cluster(items: Sequence[Geometry], limit: float) -> list[list[Geometry]]:
@@ -291,6 +289,6 @@ def proposals_markdown(
         if p.view:
             out += ["", f"![{p.profile.id} with dimensions](proposals/{p.view.name})"]
     if alone:
-        out += ["", f"Not close enough to {cfg.cluster_min_letters - 1:g} other letter(s): "
+        out += ["", "In no cluster: "
                 + names(alone)]  # fmt: skip
     return out

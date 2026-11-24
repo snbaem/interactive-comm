@@ -308,11 +308,13 @@ class AiPlan:
     classify: list[LetterRecord]
     explain: list[LetterRecord]
     fields: list[LetterRecord] = field(default_factory=list)
+    #: Number of proposed layouts to name (one call each).
+    proposals: int = 0
 
     @property
     def calls(self) -> int:
-        """Upper bound on model calls: one per letter and job."""
-        return sum(len(job) for job in self.jobs())
+        """Upper bound on model calls: one per letter and job, one per proposed layout."""
+        return sum(len(job) for job in self.jobs()) + self.proposals
 
     def jobs(self) -> list[list[LetterRecord]]:
         """The letters of every per-letter job, in the order the jobs run."""
@@ -494,6 +496,7 @@ def write_markdown(
     settings: Settings,
     path: Path,
     ai_summary: dict[str, Any] | None = None,
+    extra_sections: Sequence[str] = (),
 ) -> Path:
     """Write the human-readable portfolio report to ``path``."""
     ok = [r for r in records if r.status == STATUS_OK]
@@ -572,6 +575,7 @@ def write_markdown(
     else:
         out.append("None.")
 
+    out += extra_sections
     if any(r.ai_fields for r in records):
         out += _fields_section(records)
 
