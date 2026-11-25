@@ -2,24 +2,30 @@
 
 [![CI](https://github.com/snbaem/interactive-comm/actions/workflows/ci.yml/badge.svg)](https://github.com/snbaem/interactive-comm/actions/workflows/ci.yml)
 
-`icsel` is a local prototype for AEM Forms Interactive Communications (IC) users.
-Given a text-based letter PDF, it picks the best-fitting layout from a small set
-of layout profiles and renders a sample PDF of the letter in that layout.
-Layouts differ in where boxes sit and how big they are, for example a subject
-box on the right or a taller address box.
+`icsel` is a local prototype for people who work with AEM Forms Interactive Communications (IC).
+Given a text-based letter PDF, it compares the position and size of the letter's blocks with a
+small set of layout profiles, ranks the layouts with a reason for each, and renders a sample of
+the letter in the best one. It can also summarize a whole folder of letters. The matching is
+rule-based and runs offline; an optional AI step, off by default, only fills gaps.
 
+> **Personal, conceptual project.** This is an abstract exploration and a learning exercise.
+> It was not made for, or on behalf of, any employer, client or other organization, and does not
+> describe the systems, templates or processes of one. See [Disclosures](#disclosures).
+>
 > **Not an official Adobe project.** It is not affiliated with, endorsed by or
 > supported by Adobe. Product names are used only to describe compatibility.
 >
 > **Fidelity:** the sample PDF is a local approximation for checking fit. It is
-> not AEM Forms Interactive Communications output.
+> not AEM Forms Interactive Communications output. icsel does not read IC templates.
 
 All data in this repository is synthetic. The company, *Brightwater Utilities*,
 is fictional, and so is every name, address and account number.
 
-## Quick start
+![Browser UI with the ranking, the source letter and the sample](docs/images/browser-ui.png)
 
-Requires Python 3.10 or newer. It runs entirely offline.
+## Quick start (5 minutes)
+
+Requires Python 3.10 or newer.
 
 **Windows (PowerShell)**
 
@@ -31,8 +37,7 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 icsel samples
 icsel match samples\letters\L04-subject-right-3line.pdf
-icsel match samples\letters
-icsel profile samples\letters\L01-classic.pdf
+icsel serve --open
 ```
 
 **macOS / Linux (bash)**
@@ -45,13 +50,52 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 icsel samples
 icsel match samples/letters/L04-subject-right-3line.pdf
-icsel match samples/letters
-icsel profile samples/letters/L01-classic.pdf
+icsel serve --open
 ```
 
-`icsel match` prints a ranking per letter and writes two files per letter to
-`out/`: `<letter>.result.json` (detected blocks and per-layout scores) and
-`<letter>.sample.pdf`.
+`icsel match` prints the ranking and why other layouts were ruled out:
+
+```text
+L04-subject-right-3line.pdf
+  subject-right         0.999  fits
+  classic-left          0.473  DOES NOT FIT
+      - subject has 3 lines; layout allows 2
+  ...
+  Best layout: subject-right
+```
+
+It writes two files per letter to `out/`: `<letter>.result.json` (detected blocks and
+per-layout scores) and `<letter>.sample.pdf`. `icsel serve` opens the browser UI; stop it with
+Ctrl+C.
+
+## What it can do
+
+| | Command | More |
+| --- | --- | --- |
+| Rank layouts for a letter and render a sample | `icsel match` | [How it works](#how-it-works) |
+| Try letters in a browser | `icsel serve` | [Browser UI](#browser-ui) |
+| Summarize a folder: fits, gaps, near-duplicates, shared text, draft layouts | `icsel portfolio` | [Portfolio mode](#portfolio-mode) |
+| Draw and compare layouts with measurements | `icsel show-layout` | [Layout views](#layout-views) |
+| Draft a layout profile from a PDF | `icsel profile` | [Layout profiles](docs/profile-schema.md) |
+| Let a model fill gaps (opt-in) | `--llm` | [Optional AI step](#optional-ai-step-off-by-default) |
+| Measure rules and AI tasks on known answers | `icsel eval` | [Benchmark](#benchmark-icsel-eval) |
+
+Documents: [architecture](docs/architecture.md), [profile and settings format](docs/profile-schema.md),
+[bringing your own layouts in](docs/getting-real-templates-in.md),
+[open questions for production](docs/production-path.md), [recipe draft](docs/recipe-draft.md),
+[plan](docs/PLAN.md), [reviewer checklist](REVIEW.md), [next steps](#possible-next-steps),
+[disclosures](#disclosures).
+
+## Layout views
+
+`icsel show-layout classic-left` draws a layout with its measurements:
+
+![Layout classic-left with dimensions](docs/images/layout-view.png)
+
+`icsel show-layout classic-left --compare subject-right` puts two layouts side by side and lists
+the differences:
+
+![classic-left and subject-right side by side](docs/images/layout-comparison.png)
 
 ## Browser UI
 
@@ -96,8 +140,8 @@ placeholder like `[Date]`, a table. An optional AI step can:
 
 It is off unless you turn it on, and it never changes what the rules already
 labeled. The explanation is only requested when the rules flag a weak fit, a near-tie or
-no fit; it is shown after the rule-based text. It only fills gaps: no second address, date or subject, and only above a
-confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
+no fit; it is shown after the rule-based text. It only fills gaps: no second address, date or
+subject, and only above a confidence threshold. Everything the AI changed is marked `role_source: "llm"` in
 the result JSON and with an **AI** badge in the browser UI.
 
 **In the browser UI:** install the extra (`python -m pip install -e ".[llm]"`), run
@@ -232,6 +276,8 @@ icsel portfolio samples/portfolio
 icsel portfolio ~/letters -r --out out/portfolio
 ```
 
+![Top of a portfolio report](docs/images/portfolio-report.png)
+
 It writes `portfolio.csv` (one row per PDF, for sorting and filtering) and `portfolio.md`
 (the report). The report has:
 
@@ -329,9 +375,10 @@ table of four or more rows is treated as a statement. Its title becomes the subj
 `table`. A statement only fits layouts with `"kind": "statement"` (bundled: `statement`),
 and a letter only fits letter layouts, so neither is forced into the other's boxes.
 
-Layout profiles are JSON files, validated on load (schema: `src/icsel/data/layout-profile.schema.json`). Measurements are in points, from the top-left
-corner of the page. The bundled examples are in
-[`src/icsel/data/layouts/`](src/icsel/data/layouts/classic-left.json).
+Layout profiles are JSON files, validated on load, measured in points from the top-left
+corner of the page ([format](docs/profile-schema.md)). The bundled examples are in
+[`src/icsel/data/layouts/`](src/icsel/data/layouts/classic-left.json). See
+[architecture](docs/architecture.md) for the scoring formula and the module map.
 
 ## Development
 
@@ -341,7 +388,8 @@ ruff format --check .
 pytest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access.
+See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access. The images come from
+`python scripts/make_screenshots.py`.
 
 ## Limitations
 
@@ -351,8 +399,58 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access.
   AI step fills gaps but can be wrong too; check its labels against the scores.
 - Portfolio duplicate detection compares all pairs of letters; it is meant for a few
   thousand letters, not millions. It compares body text only, not layout.
+- icsel does not read IC templates. Layout profiles are written or corrected by hand.
+- Everything was tested on synthetic letters. The layouts and letters were made together, so
+  scores on them are close to perfect; scores on other letters will be lower.
+- No AI task has been measured with a real model yet. Run `icsel eval` with your backend first.
+- Statements are recognized by a few simple rules, tested on one synthetic design.
+- Shared text and variable fields are candidates for a person to review.
 - The sample PDF approximates placement only. It does not reproduce IC fonts,
   fragments, data binding or pagination.
+
+## Possible next steps
+
+Ideas, not commitments. None of them is built.
+
+**Improve the local tool**
+
+| Option | What it would add | Main uncertainty |
+| --- | --- | --- |
+| Measure the AI tasks | Run `icsel eval` with a real backend and drop tasks that do not beat the rules | Synthetic letters say little about real ones |
+| Read scans | An OCR step before extraction | Word positions and fonts are less reliable, so block rules need retuning |
+| Detect letters unlike any layout | A clear "none of these" answer besides the weak-fit and no-fit flags | Needs varied examples to set a threshold |
+| More document types | Statements of other designs, tables inside letters, other languages | Each type needs its own samples and rules |
+| Check generated output | A preflight check for margins, address window and unresolved placeholders | Rules differ by organization |
+
+**Move it onto a platform.** The current Python code is a local tool. Everything in this table is
+`UNVERIFIED`: it has not been checked against Adobe documentation or tried.
+
+| Option | Idea | For | Against |
+| --- | --- | --- | --- |
+| Java in AEM as a Cloud Service | Rewrite as an OSGi bundle with a Java PDF library | Letters and permissions stay in AEM | Full rewrite; extraction must be retuned; long jobs need a job queue |
+| Node.js outside AEM | Rewrite for a serverless runtime such as Adobe App Builder | Independent of AEM releases | Full rewrite; runtime limits; own authentication |
+| Python as a separate service | Keep the code; AEM calls it | Least rewriting | Hosting and security to run; letters leave AEM |
+| Stay local | Use the reports by hand when planning templates | Nothing to deploy | No integration |
+
+A sensible first test for a rewrite is to port only extraction and scoring, run the synthetic
+letters, and compare with the Python results and `truth.json`. Open platform questions are in
+[docs/production-path.md](docs/production-path.md); the plan is in [docs/PLAN.md](docs/PLAN.md).
+
+## Disclosures
+
+- **Purpose.** A personal, abstract proof of concept, shared for learning and discussion. It is
+  not a product, and not a proposal or deliverable for any organization.
+- **No employer involvement.** It is not made for, sponsored by, endorsed by or representative of
+  the author's employer or any client. Views and design choices are the author's own.
+- **No real data.** Letters, layouts, names, addresses and account numbers are synthetic.
+  Brightwater Utilities is fictional; any resemblance to a real organization, person or document
+  is coincidental. Please do not contribute real letters or templates.
+- **No affiliation.** Not affiliated with, endorsed by or supported by Adobe, Anthropic or any
+  other vendor. Product names belong to their owners and are used only for description.
+- **AI assistance.** Code and documentation were written with the help of AI tools.
+- **No warranty.** Experimental software, provided "as is" under the Apache License 2.0. It is
+  not meant for production, for approving letters, or for legal or compliance decisions. If you
+  use it with your own documents, you are responsible for having the right to do so.
 
 ## License
 
