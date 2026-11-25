@@ -51,3 +51,11 @@ jobs:
       - run: icsel portfolio samples/letters --out out/portfolio
       - run: icsel eval samples/letters --out out/eval
       - run: icsel samples --portfolio --out samples/portfolio
+      # The demo folder holds a scan and a corrupt file on purpose, so exit code 1 is expected.
+      - shell: bash
+        run: |
+          code=0
+          icsel portfolio samples/portfolio --shared-text --proposals --out out/p || code=$?
+          test "$code" -eq 1
+          test -s out/p/portfolio.csv
+          test -s out/p/shared-text.csv

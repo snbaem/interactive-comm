@@ -17,6 +17,9 @@ What is sent to the model:
   line and the first body paragraph.
 * **Naming proposed layouts** (``propose``, off by default): box geometry and layout ids.
   No letter text and no file names.
+* **Naming shared text** (``fragments``, off by default): the wording that every letter of a
+  shared-text group has in common. Digits, address lines and differing words are masked. See
+  :func:`icsel.sharedtext.fragment_payload`.
 
 What the model may change (:func:`apply_suggestions`): only blocks the rules left
 ``unknown``, only to a known role, only above a confidence threshold, and never a
@@ -36,6 +39,7 @@ from ..profile import ROLES
 from .base import CompletionBackend, LLMCallLimit, LLMError, RoleChange, Suggestion
 from .cache import ReplyCache
 from .fields import FIELDS_SCHEMA, FieldSpan, letter_blocks, parse_fields
+from .fragments import FRAGMENT_SCHEMA, parse_fragment
 from .prompts import render_prompt, template_version
 from .propose import PROPOSE_SCHEMA, parse_proposal
 from .purpose import OTHER, load_purposes, parse_purpose, purpose_payload, purpose_schema
@@ -47,7 +51,7 @@ SINGLE_ROLES = ("date", "address", "subject")
 #: Roles the model may suggest. Statement parts are labeled by rules only.
 SUGGESTED_ROLES = tuple(r for r in ROLES if r not in ("reference", "table"))
 #: Jobs the assistant can run; ``ICSEL_LLM_TASKS`` picks a subset.
-TASKS = ("classify", "explain", "fields", "propose", "purpose")
+TASKS = ("classify", "explain", "fields", "fragments", "propose", "purpose")
 #: Jobs that run when AI is on and no task list is given.
 DEFAULT_TASKS = ("classify", "explain")
 
@@ -373,6 +377,18 @@ class LLMAssistant:
             lambda raw: parse_proposal(raw, lambda why: self._drop("propose", why)),
             PROPOSE_SCHEMA,
             facts=json.dumps(facts, indent=1),
+        )
+
+    def name_fragment(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Ask for a name and description of shared wording. Sends only that wording."""
+        if "fragments" not in self.tasks:
+            return None
+        return self._ask(
+            "fragments",
+            "name_fragment",
+            lambda raw: parse_fragment(raw, lambda why: self._drop("fragments", why)),
+            FRAGMENT_SCHEMA,
+            fragment=json.dumps(payload, indent=1, ensure_ascii=False),
         )
 
     def explain_fit(self, facts: dict[str, Any]) -> str | None:

@@ -38,6 +38,10 @@ class ScoringConfig:
             address, subject and date boxes starts farther apart than this (points). The
             default, 36 pt (half an inch), is half of ``position_scale``.
         cluster_min_letters: Layout proposals: smallest cluster that becomes a proposal.
+        shared_text_threshold: Shared text: shingle similarity at or above which two texts
+            are treated as the same.
+        shared_text_min_letters: Shared text: fewest letters a text must appear in.
+        shared_text_min_words: Shared text: shorter body paragraphs are ignored.
     """
 
     role_weights: dict[str, float] = field(
@@ -56,6 +60,9 @@ class ScoringConfig:
     tie_margin: float = 0.05
     cluster_distance: float = 36.0
     cluster_min_letters: float = 2
+    shared_text_threshold: float = 0.8
+    shared_text_min_letters: float = 2
+    shared_text_min_words: float = 8
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-data view, in the same shape as the config file."""
@@ -68,6 +75,9 @@ class ScoringConfig:
             "tie_margin": self.tie_margin,
             "cluster_distance": self.cluster_distance,
             "cluster_min_letters": self.cluster_min_letters,
+            "shared_text_threshold": self.shared_text_threshold,
+            "shared_text_min_letters": self.shared_text_min_letters,
+            "shared_text_min_words": self.shared_text_min_words,
         }
 
 
@@ -80,6 +90,9 @@ _NUMBER_RULES: dict[str, tuple[float, float, str]] = {
     "tie_margin": (0.0, 1.0, "a score difference between 0 and 1"),
     "cluster_distance": (0.0, 2000.0, "a distance in points, 0 to 2000"),
     "cluster_min_letters": (1.0, 10000.0, "a number of letters, 1 or more"),
+    "shared_text_threshold": (0.1, 1.0, "a similarity between 0.1 and 1"),
+    "shared_text_min_letters": (2.0, 10000.0, "a number of letters, 2 or more"),
+    "shared_text_min_words": (1.0, 1000.0, "a number of words, 1 or more"),
 }
 
 

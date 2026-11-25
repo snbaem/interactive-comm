@@ -137,6 +137,7 @@ Pick tasks with `--ai-tasks` or `ICSEL_LLM_TASKS` (default `classify,explain`).
 | --- | --- | --- | --- |
 | `classify` | Label blocks the rules left `unknown` | Text of those blocks (up to 600 characters each); positions, sizes and roles of the others | `--llm` |
 | `explain` | Explain weak fits, near-ties and no-fits | Scores and offsets. **No letter text** | `--llm` |
+| `fragments` | Name shared-text candidates (portfolio) | Only wording that every letter of a group has in common (up to 800 characters). Numbers become `#`; address lines and differing words become `[...]` | `--ai-tasks` |
 | `propose` | Name proposed layouts (portfolio) | Box geometry and layout ids. **No letter text**, no file names | `--ai-tasks` |
 | `fields` | Find variable fields | **Letter text**: everything except letterhead and footer, so names, addresses and amounts (up to 12,000 characters) | `--ai-tasks` **and** `--fields-send-text` |
 | `purpose` | Tag the letter's purpose | **Letter text**: subject line and first body paragraph (up to 800 characters) | `--ai-tasks` **and** `--purpose-send-text` |
@@ -197,7 +198,9 @@ The synthetic letters come with `truth.json`: the true role of every block, the 
 fields, the purpose and the layout. `icsel eval` scores the rules alone, then the rules plus
 each task, and writes `eval.json` and `eval.md`. The report says plainly when a task **does
 not beat the rules**. Tokens appear when the backend reports them, a cost only when it also
-gives prices. `explain` and `propose` have no metric here. The benchmark letters are
+gives prices. `explain`, `fragments` and `propose` have no metric
+here. Boilerplate recall and precision measure the shared-text rules, which run without a
+model. The benchmark letters are
 synthetic and small; a good score on them says little about your letters.
 
 **Other providers:** the AI step is written against a one-method interface
@@ -239,6 +242,7 @@ It writes `portfolio.csv` (one row per PDF, for sorting and filtering) and `port
 - **Ambiguous**: letters where two or more fitting layouts score within
   `--ambiguity-margin` (default 0.05) of the best one.
 - **Near-duplicate letters**, grouped: candidates for shared content.
+- **Shared text**, with `--shared-text` (see below).
 - **Proposed layouts**, with `--proposals` (see below).
 - **Unreadable or no text**: corrupt files and scans are listed, and the run goes on.
 
@@ -254,6 +258,18 @@ so account numbers and amounts do not hide a copy. Pairs at or above
 `--duplicate-threshold` (default 0.8) are linked into groups. Comparisons are exact and
 pairwise, which is comfortable for a few thousand letters. Bodies shorter than 12 words
 are skipped.
+
+**Shared text.** `--shared-text` finds body paragraphs, headers and footers that recur
+across letters, with the same 5-word shingles and digit handling as the duplicate check. A
+text counts when it appears in at least `shared_text_min_letters` letters (default 2) with a
+similarity of `shared_text_threshold` (default 0.8) or more; body paragraphs need
+`shared_text_min_words` words (default 8). See `scoring.json`. The groups go to
+`shared-text.csv` and `portfolio.md`, most letters first. Each is a *candidate* for a reusable
+text fragment. No model is involved; the `fragments` AI task adds a name and a description.
+Paragraphs split by a page break, addresses, subjects, greetings, closings and tables are not
+compared. Text that is the same in every letter of a group can still be personal, for example
+two letters to the same person; address lines are masked before anything is sent, other
+wording is not. `UNVERIFIED`: how a candidate would map to an AEM document fragment.
 
 **Proposed layouts.** `--proposals` clusters the weak and no-fit letters: two letters
 belong together when none of their address, subject and date boxes starts more than
@@ -285,7 +301,7 @@ reports are still written.
 | --- | --- |
 | `icsel match PATH...` | Rank layouts for each letter, then write a result JSON and a sample PDF. The sample outlines zones and marks overflowing text in red; `--no-zones` gives a clean page instead. Other options: `--layouts PATH` (repeatable; default is the bundled examples), `--config FILE` (scoring settings, defaults in `src/icsel/data/scoring.json`), `--dimensions`, `--units`, `--out DIR`, `-r/--recursive`, `--llm BACKEND` and the AI options of `portfolio`. |
 | `icsel profile PATH...` | Derive a draft layout profile from a PDF. With one PDF it prints to stdout or writes to `-o FILE`. With several, it writes to the `-o DIR` folder (default `profiles/`). |
-| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--config`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--proposals`, `--llm BACKEND`, `--ai-tasks`, `--max-calls N`, `--fields-send-text`, `--purpose-send-text`, `--purposes FILE`, `--no-ai-cache`, `--yes`. |
+| `icsel portfolio PATH...` | Match a folder of letters and write `portfolio.csv` and `portfolio.md`: best layout per letter, ambiguous and weak fits, letters per layout, letters that fit no layout, near-duplicate groups and unreadable files. Options: `--layouts`, `--out DIR` (default `out/portfolio`), `-r/--recursive`, `--config`, `--min-score`, `--ambiguity-margin`, `--duplicate-threshold`, `--shared-text`, `--proposals`, `--llm BACKEND`, `--ai-tasks`, `--max-calls N`, `--fields-send-text`, `--purpose-send-text`, `--purposes FILE`, `--no-ai-cache`, `--yes`. |
 | `icsel eval PATH...` | Benchmark the rules, and the rules plus each AI task, against `truth.json`; writes `eval.json` and `eval.md`. Options: `--truth FILE`, `--out DIR` (default `out/eval`), `--layouts`, `--config`, `-r/--recursive`, `--yes` and the AI options of `portfolio`. |
 | `icsel show-layout LAYOUT` | Draw a layout with distances from the top and left edges, page margins, gaps between zones, sizes and line capacities. `--units in\|cm\|pt`, `--format pdf\|png\|both`, `--compare OTHER` (side by side), `--diff` (overlay `--compare` or `--letter PDF` and list differences), `--json`. `match --dimensions` does the same for each letter's best layout. |
 | `icsel serve` | Start the local browser UI (`--port`, `--host`, `--layouts`, `--workdir`, `--open`, `--llm`). |

@@ -140,6 +140,8 @@ def test_tally_metrics() -> None:
         "name_accuracy": 0.6667,
         "purpose_accuracy": 0.2,
         "layout_agreement": 1.0,
+        "boilerplate_recall": None,
+        "boilerplate_precision": None,
     }
     assert set(Tally().metrics().values()) == {None}  # nothing to divide by, nothing invented
 

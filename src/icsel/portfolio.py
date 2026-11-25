@@ -46,6 +46,7 @@ from .extract import ExtractionError, LetterStructure, NoTextError, extract
 from .llm import Assistant, LLMCallLimit, LLMError, apply_suggestions, fit_facts
 from .match import CAPACITY_ROLES, LOW_FIT_THRESHOLD, TIE_MARGIN, TieBreak, rank, resolve_ties
 from .profile import LayoutProfile
+from .sharedtext import TextUnit, letter_units
 
 #: Default similarity at or above which two letters count as near-duplicates.
 DUPLICATE_THRESHOLD = 0.8
@@ -124,6 +125,8 @@ class LetterRecord:
     ai_purpose: str = ""
     #: Where the letter's boxes sit against the chosen (or closest) layout, in inches.
     offsets: str = ""
+    #: Texts for shared-text discovery; only kept when ``Settings.shared_text`` is on.
+    texts: list[TextUnit] = field(default_factory=list)
 
 
 @dataclass
@@ -143,6 +146,7 @@ class Settings:
     margin: float = TIE_MARGIN
     duplicate_threshold: float = DUPLICATE_THRESHOLD
     scoring: ScoringConfig | None = None  # None = bundled defaults
+    shared_text: bool = False  # keep the texts of every letter for shared-text discovery
 
 
 # ---------------------------------------------------------------- scanning
@@ -233,6 +237,8 @@ def scan_letter(
         return record, None
     assess(record, letter, layouts, settings)
     record.fingerprint = body_fingerprint(letter)
+    if settings.shared_text:
+        record.texts = letter_units(letter, record.name)
     return record, letter
 
 
@@ -317,11 +323,13 @@ class AiPlan:
     purpose: list[LetterRecord] = field(default_factory=list)
     #: Number of proposed layouts to name (one call each).
     proposals: int = 0
+    #: Number of shared-text groups to name (one call each).
+    fragments: int = 0
 
     @property
     def calls(self) -> int:
-        """Upper bound on model calls: one per letter and job, one per proposed layout."""
-        return sum(len(job) for job in self.jobs()) + self.proposals
+        """Upper bound on model calls: one per letter and job, proposal and shared text."""
+        return sum(len(job) for job in self.jobs()) + self.proposals + self.fragments
 
     def jobs(self) -> list[list[LetterRecord]]:
         """The letters of every per-letter job, in the order the jobs run."""

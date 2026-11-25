@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import random
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,19 @@ _SENTENCES = [
     "The adjustment appears as a separate line on your next statement.",
     "Customers on the budget plan will see the change spread across the next six months.",
 ]
+
+#: Paragraphs planted word for word in several letters (candidates for reusable text).
+BOILERPLATE = {
+    "privacy": "We use the information in this letter only to run your account. Our privacy "
+    "notice explains how long we keep it and how you can ask for a copy.",
+    "payment": "You can pay online, by phone or at any service counter. Payments made by bank "
+    "transfer can take up to three working days to reach your account.",
+}
+#: Reads like the payment paragraph but is not the same text. It must not be grouped with it.
+NEAR_MISS = (
+    "You can pay by phone or in the customer portal. A bank transfer made on a weekend may "
+    "take a little longer before it shows up on your account."
+)
 
 ADDRESSES = {
     "short": ["Alex Sample", "42 Placeholder Lane", "Riverton ZZ 00001"],
@@ -107,6 +121,11 @@ class LetterSpec:
     table: list[list[str]] | None = None
     #: True for a letter that is meant to fit no bundled layout (manifest has no expected layout).
     fits_none: bool = False
+    #: Sentence with ``{name}`` placeholders drawn first in the body, and its variable values.
+    detail: str = ""
+    values: dict[str, str] = field(default_factory=dict)
+    #: Fixed paragraphs drawn last in the body.
+    ending: list[str] = field(default_factory=list)
     closing: str = "Kind regards,"
     signer: list[str] = field(
         default_factory=lambda: ["Riley Placeholder", "Customer Care, Brightwater Utilities"]
@@ -119,6 +138,10 @@ LETTERS: list[LetterSpec] = [
         "classic-left",
         ADDRESSES["short"],
         "Your updated tariff from April 2026",
+        detail="Your new monthly amount is {monthlyAmount} and the first payment is due on "
+        "{firstPaymentDate}.",
+        values={"monthlyAmount": "$41.20", "firstPaymentDate": "April 15, 2026"},
+        ending=[BOILERPLATE["privacy"]],
         note="Baseline letter for classic-left.",
     ),
     LetterSpec(
@@ -128,6 +151,9 @@ LETTERS: list[LetterSpec] = [
         "Meter reading review for account 0000-0002",
         offsets={"address": (6, 5), "subject": (0, 6), "date": (-10, 0)},
         seed=2,
+        detail="The reading taken on {readingDate} was {meterReading} units.",
+        values={"readingDate": "February 11, 2026", "meterReading": "48213"},
+        ending=[BOILERPLATE["payment"]],
         note="Classic-left with small offsets.",
     ),
     LetterSpec(
@@ -136,6 +162,9 @@ LETTERS: list[LetterSpec] = [
         ADDRESSES["short"],
         "Planned maintenance in your area next month",
         seed=3,
+        detail="Work starts on {workDate} and takes about {workHours} hours.",
+        values={"workDate": "May 6, 2026", "workHours": "seven"},
+        ending=[BOILERPLATE["privacy"]],
         note="Baseline letter for subject-right.",
     ),
     LetterSpec(
@@ -144,6 +173,7 @@ LETTERS: list[LetterSpec] = [
         ADDRESSES["medium"],
         "Change to your payment plan and the schedule for the remaining instalments this year",
         seed=4,
+        ending=[BOILERPLATE["payment"], BOILERPLATE["privacy"]],
         note="Subject wraps to three lines in the right-hand box.",
     ),
     LetterSpec(
@@ -170,6 +200,9 @@ LETTERS: list[LetterSpec] = [
         "Confirmation of your direct debit",
         date=None,
         seed=7,
+        detail="Payments of {debitAmount} will be taken from the account ending {accountEnding}.",
+        values={"debitAmount": "$88.75", "accountEnding": "4471"},
+        ending=[BOILERPLATE["payment"]],
         note="Edge case: no date block at all.",
     ),
     LetterSpec(
@@ -178,6 +211,7 @@ LETTERS: list[LetterSpec] = [
         ADDRESSES["short"],
         "Notice of a change to the billing period and payment dates for account 0000-0008",
         seed=8,
+        ending=[NEAR_MISS],
         note="Edge case: the subject wraps to two lines.",
     ),
     LetterSpec(
@@ -245,6 +279,9 @@ LETTERS: list[LetterSpec] = [
         ADDRESSES["medium"],
         "Your water meter has been replaced",
         seed=15,
+        detail="Your new meter has the serial number {meterSerial}.",
+        values={"meterSerial": "ZZ-7730-18"},
+        ending=[BOILERPLATE["privacy"]],
         note="Baseline letter for address-right.",
     ),
 ]
@@ -253,6 +290,14 @@ LETTERS: list[LetterSpec] = [
 def _paragraphs(n: int, seed: int) -> list[str]:
     rng = random.Random(seed)
     return [" ".join(rng.sample(_SENTENCES, k=3)) for _ in range(n)]
+
+
+def _body_texts(spec: LetterSpec) -> list[str]:
+    """Every body paragraph of ``spec``, in order."""
+    texts = list(spec.body) if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
+    if spec.detail:
+        texts.insert(0, spec.detail.format(**spec.values))
+    return texts + spec.ending
 
 
 def _baseline(page_h: float, top: float, size: float = SIZE) -> float:
@@ -326,7 +371,7 @@ def render_letter(spec: LetterSpec, layout: LayoutProfile, out: Path) -> Path:
             for i, text in enumerate(row):
                 c.drawString(body.x + i * 130, _baseline(page_h, top + r * 13, 9), text)
         top += len(spec.table) * 13 + PARA_GAP
-    paragraphs = spec.body if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
+    paragraphs = _body_texts(spec)
     blocks = [simpleSplit(p, FONT, SIZE, body.width) for p in paragraphs]
     blocks.append([spec.closing])
     blocks.append(list(spec.signer))
@@ -458,7 +503,11 @@ _MONTH_RE = re.compile(
 
 
 def _true_fields(
-    date: str | None, address: list[str], subject: str, table: list[list[str]] | None
+    date: str | None,
+    address: list[str],
+    subject: str,
+    table: list[list[str]] | None,
+    values: dict[str, str],
 ) -> list[dict[str, str]]:
     """The variable text of a synthetic letter, each text once, with unique names."""
     pairs: list[tuple[str, str]] = []
@@ -475,6 +524,7 @@ def _true_fields(
         # The first column holds fixed row labels; the rest is data.
         for row in table[1:]:
             pairs.extend((h.lower(), cell) for h, cell in list(zip(table[0], row, strict=True))[1:])
+    pairs.extend(values.items())
     out: list[dict[str, str]] = []
     used: set[str] = set()
     texts: set[str] = set()
@@ -507,9 +557,9 @@ def letter_truth(spec: LetterSpec, layout: LayoutProfile) -> dict[str, Any]:
     if spec.date:
         blocks.append({"role": "date", "lines": [spec.date]})
     if spec.table:
-        blocks.append({"role": "body", "lines": [cell for row in spec.table for cell in row]})
-    paragraphs = spec.body if spec.body is not None else _paragraphs(spec.paragraphs, spec.seed)
-    for text in paragraphs:
+        cells = [cell for row in spec.table for cell in row]
+        blocks.append({"role": "body", "lines": cells, "table": True})
+    for text in _body_texts(spec):
         blocks.append({"role": "body", "lines": simpleSplit(text, FONT, SIZE, body.width)})
     blocks.append({"role": "closing", "lines": [spec.closing, *spec.signer]})
     blocks.append({"role": "footer", "lines": [spec.footer]})
@@ -518,7 +568,7 @@ def letter_truth(spec: LetterSpec, layout: LayoutProfile) -> dict[str, Any]:
         "layout": None if spec.fits_none else spec.layout,
         "purpose": _PURPOSES.get(spec.subject, "other"),
         "blocks": blocks,
-        "fields": _true_fields(spec.date, spec.address, spec.subject, spec.table),
+        "fields": _true_fields(spec.date, spec.address, spec.subject, spec.table, spec.values),
     }
 
 
@@ -545,7 +595,28 @@ def statement_truth(spec: StatementSpec) -> dict[str, Any]:
     }
 
 
+def _add_boilerplate(letters: list[dict[str, Any]]) -> None:
+    """Record in every entry its texts that were written identically into another letter."""
+    places = {"letterhead": "header", "body": "body", "footer": "footer"}
+
+    def texts(entry: dict[str, Any]) -> list[tuple[str, str]]:
+        out = []
+        for b in entry["blocks"]:
+            if b["role"] not in places or b.get("table"):
+                continue
+            # Header lines are separate texts; a paragraph is one text over several lines.
+            parts = b["lines"] if b["role"] == "letterhead" else [" ".join(b["lines"])]
+            out += [(places[b["role"]], part) for part in parts]
+        return list(dict.fromkeys(out))
+
+    counts = Counter(t for entry in letters for t in texts(entry))
+    for entry in letters:
+        shared = [t for t in texts(entry) if counts[t] > 1]
+        entry["boilerplate"] = [{"place": place, "text": text} for place, text in shared]
+
+
 def _write_truth(out_dir: Path, letters: list[dict[str, Any]]) -> Path:
+    _add_boilerplate(letters)
     path = out_dir / "truth.json"
     doc = {"version": 1, "letters": letters}
     path.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
@@ -672,6 +743,9 @@ def _portfolio_specs() -> list[tuple[LetterSpec, dict[str, str]]]:
                 _SUBJECTS[(n + k) % len(_SUBJECTS)],
                 date=f"March {3 + (n % 20)}, 2026",
                 body=_unique_body(1000 + n, paragraphs=3 + (n % 3)),
+                ending=[BOILERPLATE["privacy"]] * (n % 3 == 0)
+                + [BOILERPLATE["payment"]] * (n % 5 == 0)
+                + [NEAR_MISS] * (n == 7),
                 offsets=_jitter(rng),
                 note=f"Clean letter planted for {layout}.",
             )
@@ -760,7 +834,7 @@ def _notice_truth(
                 "role": "address",
                 "lines": ["Alex Sample", "42 Placeholder Lane", "Riverton ZZ 00001"],
             },
-            {"role": "body", "lines": [cell for row in table for cell in row]},
+            {"role": "body", "lines": [cell for row in table for cell in row], "table": True},
             {"role": "salutation", "lines": ["Dear Alex Sample,"]},
             {"role": "body", "lines": list(sentences)},
         ],
