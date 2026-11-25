@@ -66,7 +66,7 @@ A test checks that each file with the label is listed here.
 
 | File | Item |
 | --- | --- |
-| `README.md` | Mapping of detected fields to data binding, form data model and fragments; mapping of shared text to fragments |
+| `README.md` | Mapping of detected fields to data binding, form data model and fragments; mapping of shared text to fragments; the platform options under next steps |
 | `docs/getting-real-templates-in.md` | The whole automatic route: template export, `.xdp` geometry, roles of subforms, boxes that grow |
 | `docs/production-path.md` | Where it would run, template and Interactive Communications APIs, authentication |
 | `docs/recipe-draft.md` | Library category names; mapping to Master Pages, Subforms, Document Fragments and Form Data Models; APIs |

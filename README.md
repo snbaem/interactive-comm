@@ -8,6 +8,10 @@ small set of layout profiles, ranks the layouts with a reason for each, and rend
 the letter in the best one. It can also summarize a whole folder of letters. The matching is
 rule-based and runs offline; an optional AI step, off by default, only fills gaps.
 
+> **Personal, conceptual project.** This is an abstract exploration and a learning exercise.
+> It was not made for, or on behalf of, any employer, client or other organization, and does not
+> describe the systems, templates or processes of one. See [Disclosures](#disclosures).
+>
 > **Not an official Adobe project.** It is not affiliated with, endorsed by or
 > supported by Adobe. Product names are used only to describe compatibility.
 >
@@ -79,7 +83,8 @@ Ctrl+C.
 Documents: [architecture](docs/architecture.md), [profile and settings format](docs/profile-schema.md),
 [bringing your own layouts in](docs/getting-real-templates-in.md),
 [open questions for production](docs/production-path.md), [recipe draft](docs/recipe-draft.md),
-[plan](docs/PLAN.md), [reviewer checklist](REVIEW.md).
+[plan](docs/PLAN.md), [reviewer checklist](REVIEW.md), [next steps](#possible-next-steps),
+[disclosures](#disclosures).
 
 ## Layout views
 
@@ -402,6 +407,50 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The tests block network access. The imag
 - Shared text and variable fields are candidates for a person to review.
 - The sample PDF approximates placement only. It does not reproduce IC fonts,
   fragments, data binding or pagination.
+
+## Possible next steps
+
+Ideas, not commitments. None of them is built.
+
+**Improve the local tool**
+
+| Option | What it would add | Main uncertainty |
+| --- | --- | --- |
+| Measure the AI tasks | Run `icsel eval` with a real backend and drop tasks that do not beat the rules | Synthetic letters say little about real ones |
+| Read scans | An OCR step before extraction | Word positions and fonts are less reliable, so block rules need retuning |
+| Detect letters unlike any layout | A clear "none of these" answer besides the weak-fit and no-fit flags | Needs varied examples to set a threshold |
+| More document types | Statements of other designs, tables inside letters, other languages | Each type needs its own samples and rules |
+| Check generated output | A preflight check for margins, address window and unresolved placeholders | Rules differ by organization |
+
+**Move it onto a platform.** The current Python code is a local tool. Everything in this table is
+`UNVERIFIED`: it has not been checked against Adobe documentation or tried.
+
+| Option | Idea | For | Against |
+| --- | --- | --- | --- |
+| Java in AEM as a Cloud Service | Rewrite as an OSGi bundle with a Java PDF library | Letters and permissions stay in AEM | Full rewrite; extraction must be retuned; long jobs need a job queue |
+| Node.js outside AEM | Rewrite for a serverless runtime such as Adobe App Builder | Independent of AEM releases | Full rewrite; runtime limits; own authentication |
+| Python as a separate service | Keep the code; AEM calls it | Least rewriting | Hosting and security to run; letters leave AEM |
+| Stay local | Use the reports by hand when planning templates | Nothing to deploy | No integration |
+
+A sensible first test for a rewrite is to port only extraction and scoring, run the synthetic
+letters, and compare with the Python results and `truth.json`. Open platform questions are in
+[docs/production-path.md](docs/production-path.md); the plan is in [docs/PLAN.md](docs/PLAN.md).
+
+## Disclosures
+
+- **Purpose.** A personal, abstract proof of concept, shared for learning and discussion. It is
+  not a product, and not a proposal or deliverable for any organization.
+- **No employer involvement.** It is not made for, sponsored by, endorsed by or representative of
+  the author's employer or any client. Views and design choices are the author's own.
+- **No real data.** Letters, layouts, names, addresses and account numbers are synthetic.
+  Brightwater Utilities is fictional; any resemblance to a real organization, person or document
+  is coincidental. Please do not contribute real letters or templates.
+- **No affiliation.** Not affiliated with, endorsed by or supported by Adobe, Anthropic or any
+  other vendor. Product names belong to their owners and are used only for description.
+- **AI assistance.** Code and documentation were written with the help of AI tools.
+- **No warranty.** Experimental software, provided "as is" under the Apache License 2.0. It is
+  not meant for production, for approving letters, or for legal or compliance decisions. If you
+  use it with your own documents, you are responsible for having the right to do so.
 
 ## License
 
